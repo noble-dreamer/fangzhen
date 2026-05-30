@@ -1,0 +1,98 @@
+{
+  "dataset": "A",
+  "defect_state": "healthy_no_defect",
+  "model_family": "Dataset A simple shell: ideal healthy baseline",
+  "model_path": "D:\\lab_ultr\\fz\\simple\\output\\dataset_a_shell\\pipe_shell_healthy.mph",
+  "pipe": {
+    "length_mm": 1000.0,
+    "outer_radius_mm": 160.0,
+    "inner_radius_mm": 150.0
+  },
+  "transducer": {
+    "count_per_ring": 16,
+    "tx_z_mm": 100.0,
+    "rx_z_mm": 900.0,
+    "patch_width_mm": 6.0,
+    "patch_length_mm": 27.0,
+    "total_force_n": 1.0,
+    "center_frequency_hz": 50000.0,
+    "cycles": 5
+  },
+  "material": {
+    "density_kg_m3": 2700.0,
+    "young_gpa": 70.0,
+    "poisson": 0.33,
+    "rayleigh_alpha_1_s": 0.0,
+    "rayleigh_beta_s": 5e-08
+  },
+  "absorbing_layer": {
+    "enabled": true,
+    "length_mm": 75.0,
+    "rayleigh_beta_s": 2e-06,
+    "exponent": 2.0
+  },
+  "defect_model": {
+    "corrosion_surface": "outer"
+  },
+  "solver": {
+    "t_end_ms": 0.8,
+    "dt_out_us": 0.5,
+    "relative_tolerance": 0.0001,
+    "solve": false
+  },
+  "mesh": {
+    "min_wave_speed_m_s": 2500.0,
+    "max_frequency_hz": 60000.0,
+    "elements_per_wavelength": 8.0,
+    "hmin_mm": 2.0,
+    "build_mesh": true,
+    "hmax_mm": 5.208333333333333
+  },
+  "sweep": {
+    "transmitter_indices": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "frequencies_hz": [
+      40000.0,
+      50000.0,
+      60000.0
+    ],
+    "use_parametric_sweep": true
+  },
+  "receiver_indices": [
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32
+  ],
+  "position_perturbations": {},
+  "amplitude_scale": {},
+  "problems": []
+}

@@ -1,0 +1,23 @@
+# COMSOL model files can be very large.
+*.mph
+*.mphbin
+*.mph.lock
+*.mph.recovery
+
+# Exported waveform and feature tables.
+*.csv
+
+# Python caches and local runtime artifacts.
+__pycache__/
+*.py[cod]
+
+# Local COMSOL/export runtime logs and progress files.
+*.log
+progress/
+*_progress.jsonl
+
+# Optional local scratch/debug outputs.
+output/**/csv/
+output/**/models/
+output/**/progress/
+
