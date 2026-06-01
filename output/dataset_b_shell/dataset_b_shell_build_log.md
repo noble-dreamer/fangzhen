@@ -22,6 +22,17 @@ Dataset B simple shell: realistic healthy baseline
 - Receivers are 16 shell displacement points on the receiver ring.
 - Mesh is controlled by wavelength: `hmax = 5.208 mm`, not by PZT block dimensions.
 
+## Where to find the important settings in COMSOL Model Builder
+
+- Thickness: `Component 1 > Shell Mechanics > shell thickness and defect wall loss`.
+- Explicit shell material: `Component 1 > Shell Mechanics > explicit aluminum shell elastic material`.
+- Equivalent excitation: `Component 1 > Shell Mechanics > equivalent transducer face load`.
+- Active transmitter/frequency: `Global Definitions > Parameters`, then `tx` and `pzt_fc`.
+- Excitation pulse: `Global Definitions > Functions > five-cycle Hanning sine`.
+- Receiver points: `Results > Datasets > receiver PZT 17 point` through `receiver PZT 32 point`.
+
+The excitation patches are not separate geometric PZT faces. Their positions are encoded in the face-load expression as smooth spatial windows so they do not force local mesh refinement.
+
 ## Receiver points
 
 | Channel | theta_deg | x_mm | y_mm | z_mm |

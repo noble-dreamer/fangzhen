@@ -26,6 +26,10 @@ def main() -> None:
                 print('FaceLoad:', child.name(), child.tag())
                 props = child.properties()
                 for key in [
+                    'forceType',
+                    'force',
+                    'forceReferenceArea',
+                    'forceDeformedArea',
                     'LoadTypeForce',
                     'F',
                     'Ff',

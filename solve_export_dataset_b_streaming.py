@@ -6,13 +6,14 @@ import argparse
 import random
 from pathlib import Path
 
+print('[startup] importing COMSOL/mph modules...', flush=True)
 import simple_defect_common as defects
 import simple_shell_common as shell
 import streaming_export_common as streaming
+print('[startup] imports loaded.', flush=True)
 
 
-# Server-side Windows output path. Edit this line before launching a batch job.
-OUTPUT_ROOT = Path(r'D:\lab_ultr\fz\simple\output\streaming_dataset_b_shell')
+OUTPUT_ROOT = shell.OUTPUT_ROOT / 'streaming_dataset_b_shell'
 
 DEFAULT_TX = ','.join(str(index) for index in range(1, 17))
 DEFAULT_FREQUENCIES = '40000,50000,60000'
@@ -36,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--threshold-ratio', type=float, default=0.15)
     parser.add_argument('--window-us', type=float, default=35.0)
     parser.add_argument('--group-velocity', type=float, default=2522.0)
+    parser.add_argument('--heartbeat-s', type=float, default=streaming.DEFAULT_HEARTBEAT_S)
+    streaming.add_solver_arguments(parser)
     parser.add_argument(
         '--cores',
         type=int,
@@ -118,10 +121,13 @@ def main() -> None:
     healthy_root = args.healthy_waveform_root
     healthy_sample_id = args.healthy_waveform_sample_id
 
+    streaming.console_log('[startup] starting COMSOL client...')
     client = shell.start_client(cores=args.cores)
+    streaming.console_log('[startup] COMSOL client started.')
     try:
         if args.include_healthy or args.only_healthy:
             configure_b(args.seed0)
+            streaming.apply_solver_arguments(args)
             result = streaming.solve_export_sample(
                 client=client,
                 dataset='B',
@@ -136,6 +142,8 @@ def main() -> None:
                 window_us=args.window_us,
                 group_velocity=args.group_velocity,
                 clear_each_case=clear_each_case,
+                heartbeat_s=args.heartbeat_s,
+                reuse_sample_model=not args.rebuild_each_case,
             )
             rows.append(result_row(result, args.seed0, 0, 0))
             healthy_root = args.output_root / 'csv' / 'waveforms'
@@ -146,6 +154,7 @@ def main() -> None:
             for sample_id in range(args.start_id, args.start_id + args.samples):
                 seed = args.seed0 + sample_id
                 configure_b(seed)
+                streaming.apply_solver_arguments(args)
                 sample = defects.generate_sample(sample_id, seed, sampling)
                 model_defects, model_lobes = defects.to_shell_defects(sample)
                 name = f'dataset_b_shell_sample_{sample_id:04d}'
@@ -165,6 +174,8 @@ def main() -> None:
                     window_us=args.window_us,
                     group_velocity=args.group_velocity,
                     clear_each_case=clear_each_case,
+                    heartbeat_s=args.heartbeat_s,
+                    reuse_sample_model=not args.rebuild_each_case,
                 )
                 rows.append(result_row(result, seed, len(sample.defects), len(sample.lobes)))
     finally:

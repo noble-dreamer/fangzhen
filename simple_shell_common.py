@@ -72,8 +72,14 @@ class DefectModelConfig:
 @dataclass(frozen=True)
 class SolverConfig:
     t_end_ms: float = 0.8
-    dt_out_us: float = 0.5
+    dt_out_us: float = 0.7
     relative_tolerance: float = 1e-4
+    direct_linear_solver: str = 'pardiso'
+    cudss_precision: str = 'single'
+    cudss_hybrid_memory: str = 'auto'
+    cudss_use_hybrid_compute: bool = False
+    cudss_use_multiple_gpus: bool = False
+    pardiso_use_cluster: bool = False
     solve: bool = False
 
 
@@ -132,6 +138,8 @@ POSITION_PERTURBATIONS: dict[int, dict[str, float]] = {}
 AMPLITUDE_SCALE: dict[int, float] = {}
 MODEL_FAMILY = 'simple shell guided-wave model'
 DATASET_NOTES: list[str] = []
+CREATE_RECEIVER_DATASETS = True
+CREATE_VISUAL_MARKER_DATASETS = True
 
 
 def set_if_possible(node, name: str, value) -> bool:
@@ -412,8 +420,14 @@ def create_shell_physics(model, geometry, shell_selection, defects: list[DefectC
 
     load = shell.create('FaceLoad', 2, name='equivalent transducer face load')
     load.select(shell_selection)
-    set_if_possible(load, 'LoadTypeForce', 'ForceAreaFace')
-    load.property('F', load_vector_expression())
+    load_vector = load_vector_expression()
+    set_if_possible(load, 'forceType', 'ForceArea')
+    set_if_possible(load, 'forceReferenceArea', load_vector)
+    # Older COMSOL/MPh combinations accepted these field names.  Keep them as
+    # compatibility writes, but COMSOL 6.4 Shell ForceArea displays/evaluates
+    # forceReferenceArea in the GUI as f_A.
+    # set_if_possible(load, 'LoadTypeForce', 'ForceAreaFace')
+    # set_if_possible(load, 'F', load_vector)
     load.comment(
         'Equivalent transducer load. Smooth spatial windows replace PZT solid '
         'domains, so mesh size is controlled by wavelength rather than PZT size. '
@@ -468,24 +482,60 @@ def tune_solver(model) -> None:
             solution.rename('simple shell displacement solution')
         except Exception:
             pass
-        for feature in solution.children():
-            if feature.type() != 'Time':
-                continue
-            for name, value in [
-                ('tlist', 'range(0, dt_out, t_end)'),
-                ('rtol', SOLVER.relative_tolerance),
-                ('timemethod', 'genalpha'),
-                ('tstepsgenalpha', 'strict'),
-                ('maxstepconstraintgenalpha', 'expr'),
-                ('maxstepexpressiongenalpha', 'dt_out'),
-                ('tstepsstore', 1),
-                ('plot', 'off'),
-                ('probefreq', 'tsteps'),
-            ]:
-                set_if_possible(feature, name, value)
+        for feature in walk_solver_features(solution):
+            if feature.type() == 'Time':
+                for name, value in [
+                    ('tlist', 'range(0, dt_out, t_end)'),
+                    ('rtol', SOLVER.relative_tolerance),
+                    ('timemethod', 'genalpha'),
+                    ('tstepsgenalpha', 'strict'),
+                    ('maxstepconstraintgenalpha', 'expr'),
+                    ('maxstepexpressiongenalpha', 'dt_out'),
+                    ('tstepsstore', 1),
+                    ('plot', 'off'),
+                    ('probefreq', 'tsteps'),
+                ]:
+                    set_if_possible(feature, name, value)
+            elif feature.type() == 'Direct':
+                configure_direct_solver(feature)
+
+
+def walk_solver_features(node):
+    for child in node.children():
+        yield child
+        yield from walk_solver_features(child)
+
+
+def configure_direct_solver(feature) -> None:
+    solver_name = SOLVER.direct_linear_solver.lower()
+    if solver_name:
+        set_if_possible(feature, 'linsolver', solver_name)
+    if solver_name == 'cudss':
+        set_if_possible(feature, 'cudssprecision', SOLVER.cudss_precision)
+        set_if_possible(feature, 'cudsshybridmemory', SOLVER.cudss_hybrid_memory)
+        set_if_possible(feature, 'cudssusehybridcompute', 'on' if SOLVER.cudss_use_hybrid_compute else 'off')
+        set_if_possible(feature, 'cudssmultigpusinglenode', 'on' if SOLVER.cudss_use_multiple_gpus else 'off')
+        set_if_possible(feature, 'cudssreorder', 'auto')
+        set_if_possible(feature, 'cudssmatching', 'auto')
+        set_if_possible(feature, 'cudssfactor', 'auto')
+        feature.comment(
+            'Direct linear solver set by simple_shell_common.py. '
+            'Uses NVIDIA cuDSS for CUDA GPU acceleration when a compatible '
+            'GPU and driver are available to the COMSOL process.'
+        )
+    elif solver_name == 'pardiso':
+        set_if_possible(feature, 'clusterpardiso', 'on' if SOLVER.pardiso_use_cluster else 'off')
+        feature.comment(
+            'Direct linear solver set by simple_shell_common.py. '
+            'PARDISO in COMSOL Direct solver does not expose a cuDSS-like '
+            'single-precision factorization switch here; use SolverConfig.relative_tolerance '
+            'for comparable transient tolerance studies.'
+        )
 
 
 def create_receiver_datasets(model) -> None:
+    if not CREATE_RECEIVER_DATASETS:
+        return
     datasets = model / 'datasets'
     for item in receiver_positions():
         dataset = datasets.create('CutPoint3D', name=f'receiver PZT {item["index"]:02d} point')
@@ -494,6 +544,34 @@ def create_receiver_datasets(model) -> None:
         dataset.property('pointy', f'{item["y_mm"]:.12g}[mm]')
         dataset.property('pointz', f'{item["z_mm"]:.12g}[mm]')
         dataset.comment('Receiver point for radial shell displacement export.')
+
+
+def create_marker_dataset(model, name: str, positions: list[dict], comment: str) -> None:
+    if not positions:
+        return
+    dataset = (model / 'datasets').create('CutPoint3D', name=name)
+    dataset.property('data', 'dset1')
+    dataset.property('pointx', [f'{item["x_mm"]:.12g}[mm]' for item in positions])
+    dataset.property('pointy', [f'{item["y_mm"]:.12g}[mm]' for item in positions])
+    dataset.property('pointz', [f'{item["z_mm"]:.12g}[mm]' for item in positions])
+    dataset.comment(comment)
+
+
+def create_visual_marker_datasets(model) -> None:
+    if not CREATE_VISUAL_MARKER_DATASETS:
+        return
+    create_marker_dataset(
+        model,
+        'transmitter PZT marker points',
+        transmitter_positions(),
+        'Visual-only transmitter marker points. These datasets are for COMSOL result plotting and do not affect physics, mesh, or loads.',
+    )
+    create_marker_dataset(
+        model,
+        'receiver PZT marker points',
+        receiver_positions(),
+        'Visual-only receiver marker points. Individual receiver datasets are still used for waveform export.',
+    )
 
 
 def build_model_object(
@@ -514,6 +592,7 @@ def build_model_object(
     create_mesh(model, geometry, shell_selection)
     create_study(model)
     create_receiver_datasets(model)
+    create_visual_marker_datasets(model)
     problems = model.problems()
     if SOLVER.solve:
         model.solve()
@@ -614,6 +693,8 @@ def model_metadata(dataset: str, defect_state: str, model_path: Path | str | Non
         },
         'sweep': asdict(SWEEP),
         'receiver_indices': list(RECEIVER_INDICES),
+        'create_receiver_datasets': CREATE_RECEIVER_DATASETS,
+        'create_visual_marker_datasets': CREATE_VISUAL_MARKER_DATASETS,
         'position_perturbations': POSITION_PERTURBATIONS,
         'amplitude_scale': AMPLITUDE_SCALE,
         'problems': problems,

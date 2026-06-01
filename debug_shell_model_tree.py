@@ -58,7 +58,8 @@ def main() -> None:
                     props,
                     [
                         'E_mat', 'E', 'nu_mat', 'nu', 'rho_mat', 'rho',
-                        'd', 'OffsetDefinition', 'F', 'Ff', 'LoadTypeForce',
+                        'd', 'OffsetDefinition', 'forceType', 'force',
+                        'forceReferenceArea', 'F', 'Ff', 'LoadTypeForce',
                     ],
                 ))
 

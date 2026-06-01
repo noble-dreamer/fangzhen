@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--tx', default='1')
     parser.add_argument('--frequencies', default='50000')
     parser.add_argument('--dataset', default=PARAM_DATASET)
-    parser.add_argument('--cores', type=int, default=1)
+    parser.add_argument('--cores', type=int, default=4)
     return parser.parse_args()
 
 

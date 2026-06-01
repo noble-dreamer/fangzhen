@@ -1,0 +1,382 @@
+{
+  "dataset": "B",
+  "sample_id": "dataset_b_shell_healthy",
+  "defect_state": "healthy_no_defect",
+  "sample": {
+    "sample_id": 0,
+    "seed": 610000,
+    "defects": [],
+    "lobes": []
+  },
+  "model": {
+    "dataset": "B",
+    "defect_state": "healthy_no_defect",
+    "model_family": "Dataset B simple shell streaming solve/export",
+    "model_path": null,
+    "pipe": {
+      "length_mm": 1000.0,
+      "outer_radius_mm": 160.0,
+      "inner_radius_mm": 150.0
+    },
+    "transducer": {
+      "count_per_ring": 16,
+      "tx_z_mm": 100.0,
+      "rx_z_mm": 900.0,
+      "patch_width_mm": 6.0,
+      "patch_length_mm": 27.0,
+      "total_force_n": 1.0,
+      "center_frequency_hz": 50000.0,
+      "cycles": 5
+    },
+    "material": {
+      "density_kg_m3": 2698.4704820615784,
+      "young_gpa": 69.26424186360161,
+      "poisson": 0.32669194990881295,
+      "rayleigh_alpha_1_s": 0.0,
+      "rayleigh_beta_s": 3.0105432122677684e-08
+    },
+    "absorbing_layer": {
+      "enabled": false,
+      "length_mm": 75.0,
+      "rayleigh_beta_s": 2e-06,
+      "exponent": 2.0
+    },
+    "defect_model": {
+      "corrosion_surface": "outer"
+    },
+    "solver": {
+      "t_end_ms": 0.8,
+      "dt_out_us": 20.0,
+      "relative_tolerance": 0.0001,
+      "direct_linear_solver": "pardiso",
+      "cudss_precision": "single",
+      "cudss_hybrid_memory": "auto",
+      "cudss_use_hybrid_compute": false,
+      "cudss_use_multiple_gpus": false,
+      "pardiso_use_cluster": false,
+      "solve": false
+    },
+    "mesh": {
+      "min_wave_speed_m_s": 2500.0,
+      "max_frequency_hz": 60000.0,
+      "elements_per_wavelength": 8.0,
+      "hmin_mm": 2.0,
+      "build_mesh": true,
+      "hmax_mm": 5.208333333333333
+    },
+    "sweep": {
+      "transmitter_indices": [
+        1
+      ],
+      "frequencies_hz": [
+        50000.0
+      ],
+      "use_parametric_sweep": false
+    },
+    "receiver_indices": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32
+    ],
+    "create_receiver_datasets": false,
+    "create_visual_marker_datasets": false,
+    "position_perturbations": {
+      "1": {
+        "dz_mm": 0.8661475089984951,
+        "dtheta_deg": -0.4925890447938994
+      },
+      "2": {
+        "dz_mm": -0.21656690855056082,
+        "dtheta_deg": -0.5598660590963664
+      },
+      "3": {
+        "dz_mm": 0.14576103770761484,
+        "dtheta_deg": 0.6054232915691937
+      },
+      "4": {
+        "dz_mm": -0.37268362804662125,
+        "dtheta_deg": -0.2684099819189545
+      },
+      "5": {
+        "dz_mm": -0.742913412002681,
+        "dtheta_deg": 0.2476398307412342
+      },
+      "6": {
+        "dz_mm": -0.03400362448519645,
+        "dtheta_deg": 0.385897984736463
+      },
+      "7": {
+        "dz_mm": -0.8621155454307081,
+        "dtheta_deg": 0.8482652005667661
+      },
+      "8": {
+        "dz_mm": 0.49909753309636606,
+        "dtheta_deg": 0.6264685419697078
+      },
+      "9": {
+        "dz_mm": -0.8851537023819867,
+        "dtheta_deg": -0.6455511703400263
+      },
+      "10": {
+        "dz_mm": -0.850781792804741,
+        "dtheta_deg": 0.9447325478626385
+      },
+      "11": {
+        "dz_mm": -0.016464008287736975,
+        "dtheta_deg": -0.19597525461643128
+      },
+      "12": {
+        "dz_mm": 0.1597094581712004,
+        "dtheta_deg": 0.03585366804984469
+      },
+      "13": {
+        "dz_mm": -0.6376782450587153,
+        "dtheta_deg": -0.012161584506560796
+      },
+      "14": {
+        "dz_mm": 0.15004563543782945,
+        "dtheta_deg": -0.37834322622005456
+      },
+      "15": {
+        "dz_mm": -0.7695306877049222,
+        "dtheta_deg": -0.1247860473466833
+      },
+      "16": {
+        "dz_mm": -0.6769967808426407,
+        "dtheta_deg": 0.02618880794511025
+      },
+      "17": {
+        "dz_mm": -0.5364542251915498,
+        "dtheta_deg": 0.844840309541715
+      },
+      "18": {
+        "dz_mm": 0.03165635852858584,
+        "dtheta_deg": -0.45029420690613375
+      },
+      "19": {
+        "dz_mm": -0.2627661364580003,
+        "dtheta_deg": 0.48132566277375255
+      },
+      "20": {
+        "dz_mm": 0.727682886214593,
+        "dtheta_deg": 0.5517648176328469
+      },
+      "21": {
+        "dz_mm": 0.6785691122962854,
+        "dtheta_deg": 0.7338282785219299
+      },
+      "22": {
+        "dz_mm": 0.39736958790544463,
+        "dtheta_deg": -0.4668467167365986
+      },
+      "23": {
+        "dz_mm": -0.5214245883925224,
+        "dtheta_deg": -0.9206884879375032
+      },
+      "24": {
+        "dz_mm": 0.5107118998882796,
+        "dtheta_deg": 0.3106478980633296
+      },
+      "25": {
+        "dz_mm": 0.22436800126007017,
+        "dtheta_deg": 0.3208669770292176
+      },
+      "26": {
+        "dz_mm": -0.054899874656684,
+        "dtheta_deg": 0.17769968054917884
+      },
+      "27": {
+        "dz_mm": 0.762113155474182,
+        "dtheta_deg": 0.2573913633682834
+      },
+      "28": {
+        "dz_mm": 0.8089298967522502,
+        "dtheta_deg": 0.8889412585432275
+      },
+      "29": {
+        "dz_mm": -0.7137616236575035,
+        "dtheta_deg": 0.7238743160099355
+      },
+      "30": {
+        "dz_mm": -0.7401745797255133,
+        "dtheta_deg": -0.23184253420071088
+      },
+      "31": {
+        "dz_mm": 0.8149329685648563,
+        "dtheta_deg": -0.791230994561485
+      },
+      "32": {
+        "dz_mm": -0.9636771534513473,
+        "dtheta_deg": -0.38542785337465557
+      }
+    },
+    "amplitude_scale": {
+      "1": 0.8592653804237267,
+      "2": 1.0305609595862941,
+      "3": 1.0116981003566934,
+      "4": 0.9938990695299297,
+      "5": 0.938748559849035,
+      "6": 0.9701898356923722,
+      "7": 1.0511874326165396,
+      "8": 0.907300665810126,
+      "9": 1.040168361628098,
+      "10": 1.0082255483345168,
+      "11": 0.9293060464176226,
+      "12": 0.9379436093475355,
+      "13": 1.081459015420248,
+      "14": 1.130334501255177,
+      "15": 0.9502780491382449,
+      "16": 1.0679798608765048,
+      "17": 0.988794320319303,
+      "18": 0.8549326002216913,
+      "19": 0.9634714014592742,
+      "20": 1.077692174476605,
+      "21": 1.032031158055803,
+      "22": 1.1090468416534955,
+      "23": 1.0314192069222192,
+      "24": 1.0286043226011745,
+      "25": 1.0037582241534797,
+      "26": 0.97258587806594,
+      "27": 0.8602930052140694,
+      "28": 0.8527071714373973,
+      "29": 1.0006963547538417,
+      "30": 0.957502362882154,
+      "31": 0.9648618362285397,
+      "32": 1.0106548962198816
+    },
+    "problems": {
+      "case_problems": [
+        {
+          "tx": 1,
+          "frequency_hz": 50000.0,
+          "build_problems": [],
+          "post_solve_problems": [],
+          "solve_elapsed_s": 293.26600000000326,
+          "waveform_check": {
+            "time_count": 41,
+            "channel_count": 16,
+            "finite": true,
+            "nonzero_channels": 16,
+            "dead_channels": [],
+            "max_abs_per_channel_m": [
+              8.028238094096657e-10,
+              5.791179085932312e-10,
+              1.9681150279098951e-10,
+              2.0453436116771257e-10,
+              3.499111531953688e-10,
+              3.4176126871082856e-10,
+              2.2433262592003277e-10,
+              1.9145947438348613e-10,
+              1.9121444156311742e-10,
+              1.9042005731724742e-10,
+              2.2843449580172979e-10,
+              3.483772148579888e-10,
+              3.389375347311458e-10,
+              1.8837402327913946e-10,
+              2.0873664129715488e-10,
+              5.788858430005271e-10
+            ],
+            "global_max_abs_m": 8.028238094096657e-10
+          },
+          "waveform_csv": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\csv\\waveforms\\dataset_b_shell_healthy_tx01_f50000Hz_waveforms.csv",
+          "solution_dataset": "dset1",
+          "saved_mph": false,
+          "reused_sample_model": true,
+          "cleared_solution_data": [
+            "simple shell displacement solution:clearSolutionData"
+          ]
+        }
+      ]
+    }
+  },
+  "defect_label": {
+    "sample_id": "dataset_b_shell_healthy",
+    "coordinate_system": "unfolded outer pipe surface, theta-z",
+    "array_shape": [
+      "z_index",
+      "theta_index"
+    ],
+    "depth_units": "mm",
+    "theta_axis": {
+      "units": "deg",
+      "range": [
+        0.0,
+        360.0
+      ],
+      "count": 512,
+      "step": 0.703125,
+      "endpoint_included": false,
+      "image_axis": "x/columns"
+    },
+    "z_axis": {
+      "units": "mm",
+      "range": [
+        0.0,
+        1000.0
+      ],
+      "count": 512,
+      "step": 1.9569471624266144,
+      "image_axis": "y/rows"
+    },
+    "pipe": {
+      "length_mm": 1000.0,
+      "outer_radius_mm": 160.0,
+      "inner_radius_mm": 150.0,
+      "mid_radius_mm": 155.0,
+      "wall_thickness_mm": 10.0
+    },
+    "h_min_mm": 1.0,
+    "max_wall_loss_mm": 9.0,
+    "normalization_denominator_mm": 9.0,
+    "mask_threshold_mm": 0.01,
+    "preview_max_mm": 1e-12,
+    "preview_colormap": "viridis",
+    "formula": "sum(depth_mm * exp(-(((Rm*dtheta)/rt)^2 + ((z-z0)/rz)^2)^4)), clipped by h0-h_min",
+    "files": {
+      "depth_mm_npy": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\labels\\dataset_b_shell_healthy_defect_depth_mm.npy",
+      "depth_norm_npy": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\labels\\dataset_b_shell_healthy_defect_depth_norm.npy",
+      "mask_npy": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\labels\\dataset_b_shell_healthy_defect_mask.npy",
+      "preview_png": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\labels\\dataset_b_shell_healthy_defect_label.png",
+      "metadata_json": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\labels\\dataset_b_shell_healthy_defect_label_metadata.json"
+    },
+    "defect_count": 0,
+    "lobe_count": 0
+  },
+  "streaming_export": {
+    "saved_mph": false,
+    "case_count": 1,
+    "tx": [
+      1
+    ],
+    "frequencies_hz": [
+      50000.0
+    ],
+    "clear_each_case": true,
+    "reuse_sample_model": true,
+    "clear_solution_after_each_export": true,
+    "heartbeat_s": 20.0,
+    "progress_file": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\progress\\dataset_b_shell_healthy_progress.jsonl",
+    "waveform_files": [
+      "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\csv\\waveforms\\dataset_b_shell_healthy_tx01_f50000Hz_waveforms.csv"
+    ],
+    "feature_files": [
+      "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\csv\\tomography_features\\dataset_b_shell_healthy_tomography_features.csv",
+      "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\csv\\tomography_features\\dataset_b_shell_healthy_helical_order_projections.csv",
+      "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\csv\\tomography_features\\dataset_b_shell_healthy_receiver_summary.csv"
+    ],
+    "note": "COMSOL solution fields were evaluated in-session, exported, and then discarded."
+  }
+}

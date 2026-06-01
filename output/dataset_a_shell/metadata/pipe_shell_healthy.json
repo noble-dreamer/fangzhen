@@ -36,8 +36,14 @@
   },
   "solver": {
     "t_end_ms": 0.8,
-    "dt_out_us": 0.5,
+    "dt_out_us": 0.7,
     "relative_tolerance": 0.0001,
+    "direct_linear_solver": "pardiso",
+    "cudss_precision": "single",
+    "cudss_hybrid_memory": "auto",
+    "cudss_use_hybrid_compute": false,
+    "cudss_use_multiple_gpus": false,
+    "pardiso_use_cluster": false,
     "solve": false
   },
   "mesh": {

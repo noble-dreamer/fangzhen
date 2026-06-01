@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+print('[startup] importing COMSOL/mph modules...', flush=True)
 import simple_defect_common as defects
 import simple_shell_common as shell
 import streaming_export_common as streaming
+print('[startup] imports loaded.', flush=True)
 
 
-OUTPUT_ROOT = Path(r'D:\lab_ultr\fz\simple\output\streaming_dataset_a_training_shell')
+OUTPUT_ROOT = shell.OUTPUT_ROOT / 'streaming_dataset_a_training_shell'
 
 DEFAULT_TX = ','.join(str(index) for index in range(1, 17))
 DEFAULT_FREQUENCIES = '40000,50000,60000'
@@ -34,6 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--threshold-ratio', type=float, default=0.15)
     parser.add_argument('--window-us', type=float, default=35.0)
     parser.add_argument('--group-velocity', type=float, default=2522.0)
+    parser.add_argument('--heartbeat-s', type=float, default=streaming.DEFAULT_HEARTBEAT_S)
+    streaming.add_solver_arguments(parser)
     parser.add_argument('--cores', type=int, default=None)
     parser.add_argument('--keep-client-cache', action='store_true')
     return parser.parse_args()
@@ -75,6 +79,7 @@ def result_row(result: streaming.SampleExportResult, seed: int | None, defect_co
 def main() -> None:
     args = parse_args()
     configure()
+    streaming.apply_solver_arguments(args)
     cases = streaming.make_cases(
         streaming.parse_int_list(args.tx),
         streaming.parse_float_list(args.frequencies),
@@ -84,7 +89,9 @@ def main() -> None:
     healthy_root = args.healthy_waveform_root
     healthy_sample_id = args.healthy_waveform_sample_id
 
+    streaming.console_log('[startup] starting COMSOL client...')
     client = shell.start_client(cores=args.cores)
+    streaming.console_log('[startup] COMSOL client started.')
     try:
         if args.include_healthy or args.only_healthy:
             result = streaming.solve_export_sample(
@@ -101,6 +108,8 @@ def main() -> None:
                 window_us=args.window_us,
                 group_velocity=args.group_velocity,
                 clear_each_case=clear_each_case,
+                heartbeat_s=args.heartbeat_s,
+                reuse_sample_model=not args.rebuild_each_case,
             )
             rows.append(result_row(result, None, 0, 0))
             healthy_root = args.output_root / 'csv' / 'waveforms'
@@ -134,6 +143,8 @@ def main() -> None:
                     window_us=args.window_us,
                     group_velocity=args.group_velocity,
                     clear_each_case=clear_each_case,
+                    heartbeat_s=args.heartbeat_s,
+                    reuse_sample_model=not args.rebuild_each_case,
                 )
                 rows.append(result_row(result, seed, len(sample.defects), len(sample.lobes)))
     finally:

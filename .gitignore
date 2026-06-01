@@ -20,4 +20,5 @@ progress/
 output/**/csv/
 output/**/models/
 output/**/progress/
-
+output/**/labels/
+output/label_check*/
