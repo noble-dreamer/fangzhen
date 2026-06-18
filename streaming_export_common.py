@@ -127,8 +127,7 @@ def apply_solver_arguments(args) -> None:
 
 
 def radial_expression(position: dict[str, float]) -> str:
-    theta = math.radians(position['theta_deg'])
-    return f'({math.cos(theta):.12g})*u+({math.sin(theta):.12g})*v'
+    return shell.radial_displacement_expr(position)
 
 
 def project_position_to_shell_midsurface(position: dict[str, Any]) -> dict[str, Any]:
@@ -408,8 +407,73 @@ def evaluate_current_solution_from_nearest_shell_points(
     return channels, nearest
 
 
+def global_result_time_channels(values: np.ndarray, time_count: int, channel_count: int) -> np.ndarray:
+    array = np.asarray(values)
+    array = np.real_if_close(array)
+    if np.iscomplexobj(array):
+        array = np.real(array)
+    array = np.asarray(array, dtype=float).squeeze()
+    if array.ndim == 1:
+        if channel_count == 1 and array.size == time_count:
+            return array.reshape(time_count, 1)
+        if array.size == time_count * channel_count:
+            return array.reshape(channel_count, time_count).T
+    if array.ndim == 2:
+        if array.shape == (channel_count, time_count):
+            return array.T
+        if array.shape == (time_count, channel_count):
+            return array
+    for time_axis, size in enumerate(array.shape):
+        if size != time_count:
+            continue
+        moved = np.moveaxis(array, time_axis, 0).reshape(time_count, -1)
+        if moved.shape[1] == channel_count:
+            return moved
+    raise RuntimeError(
+        f'COMSOL weighted receiver data shape {array.shape} does not match '
+        f'time_count={time_count}, channel_count={channel_count}'
+    )
+
+
+def evaluate_receiver_weighted_averages(model, solution_dataset, time_count: int) -> np.ndarray:
+    expressions = shell.receiver_weighted_average_expressions()
+    evaluation = (model / 'evaluations').create('EvalGlobal')
+    try:
+        evaluation.property('data', solution_dataset)
+        evaluation.property('expr', expressions)
+        evaluation.property('unit', ['m'] * len(expressions))
+        evaluation.property('probetag', 'none')
+        java = evaluation.java
+        raw = np.asarray(java.computeResult())
+        if java.isComplex():
+            values = raw[0].astype(complex) + 1j * raw[1]
+        else:
+            values = raw[0]
+        channels = global_result_time_channels(values, time_count, len(expressions))
+    finally:
+        evaluation.remove()
+    if not np.all(np.isfinite(channels)):
+        raise RuntimeError('COMSOL weighted receiver average export returned non-finite data.')
+    console_log(
+        '[export] sampled receiver traces from patch-weighted shell averages '
+        f'using {shell.RECEIVER_INTEGRATION_OPERATOR}.'
+    )
+    return channels
+
+
 def evaluate_current_solution(model, solution_dataset, positions: list[dict[str, Any]], expressions: list[str]) -> tuple[np.ndarray, np.ndarray]:
     time_s = np.asarray(model.evaluate('t', dataset=solution_dataset), dtype=float).reshape(-1)
+    try:
+        data = evaluate_receiver_weighted_averages(model, solution_dataset, time_s.size)
+        if data.shape[0] != time_s.shape[0]:
+            raise RuntimeError(f'time/channel length mismatch: {time_s.shape[0]} != {data.shape[0]}')
+        return time_s, data
+    except Exception as weighted_error:
+        console_log(
+            '[export] patch-weighted receiver export failed; falling back to point/nearest shell export. '
+            f'{type(weighted_error).__name__}: {weighted_error}'
+        )
+
     channels = []
     point_errors = []
     for position, expression in zip(positions, expressions, strict=True):
@@ -509,6 +573,18 @@ def write_dict_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_feature_csvs(
+    feature_files: list[Path],
+    feature_rows: list[dict[str, Any]],
+    helical_rows: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+) -> None:
+    """Checkpoint accumulated per-case feature rows to disk."""
+    write_dict_csv(feature_files[0], feature_rows)
+    write_dict_csv(feature_files[1], helical_rows)
+    write_dict_csv(feature_files[2], summary_rows)
 
 
 def read_waveform(path: Path) -> np.ndarray:
@@ -971,6 +1047,11 @@ def solve_export_sample(
     feature_dir = output_root / 'csv' / 'tomography_features'
     metadata_dir = output_root / 'metadata'
     progress_path = output_root / 'progress' / f'{sample_id}_progress.jsonl'
+    feature_files = [
+        feature_dir / f'{sample_id}_tomography_features.csv',
+        feature_dir / f'{sample_id}_helical_order_projections.csv',
+        feature_dir / f'{sample_id}_receiver_summary.csv',
+    ]
     waveform_files: list[Path] = []
     case_problems: list[dict[str, Any]] = []
     feature_rows: list[dict[str, Any]] = []
@@ -1060,6 +1141,7 @@ def solve_export_sample(
                 window_us=window_us,
                 group_velocity=group_velocity,
             )
+            write_feature_csvs(feature_files, feature_rows, helical_rows, summary_rows)
             cleared_solution_data = clear_solution_data(model) if clear_solution_after_export else []
             case_problems.append({
                 'tx': case.tx,
@@ -1197,14 +1279,7 @@ def solve_export_sample(
         if pbar is not None:
             pbar.close()
 
-    feature_files = [
-        feature_dir / f'{sample_id}_tomography_features.csv',
-        feature_dir / f'{sample_id}_helical_order_projections.csv',
-        feature_dir / f'{sample_id}_receiver_summary.csv',
-    ]
-    write_dict_csv(feature_files[0], feature_rows)
-    write_dict_csv(feature_files[1], helical_rows)
-    write_dict_csv(feature_files[2], summary_rows)
+    write_feature_csvs(feature_files, feature_rows, helical_rows, summary_rows)
 
     metadata_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = metadata_dir / f'{sample_id}.json'

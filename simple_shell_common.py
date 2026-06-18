@@ -2,7 +2,7 @@
 
 The simplified model removes all PZT solid domains. Transducers are represented
 by smooth equivalent face-load windows on a cylindrical shell midsurface, and
-receivers are exported from point datasets on the receiver ring.
+receivers are exported as small patch-weighted shell displacement averages.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ import mph
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_ROOT = ROOT / 'output'
+DEFECT_WINDOW_POWER = 2
+DEFECT_LOSS_MAX_MM = 5.0
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,7 @@ MODEL_FAMILY = 'simple shell guided-wave model'
 DATASET_NOTES: list[str] = []
 CREATE_RECEIVER_DATASETS = True
 CREATE_VISUAL_MARKER_DATASETS = True
+RECEIVER_INTEGRATION_OPERATOR = 'intop_shell'
 
 
 def set_if_possible(node, name: str, value) -> bool:
@@ -187,6 +190,25 @@ def receiver_positions() -> list[dict]:
     return [item for item in transducer_positions() if item['index'] in allowed]
 
 
+def radial_displacement_expr(position: dict) -> str:
+    theta = math.radians(position['theta_deg'])
+    return f'({math.cos(theta):.12g})*u+({math.sin(theta):.12g})*v'
+
+
+def receiver_window_expr(position: dict, width_name: str = 'pzt_w', length_name: str = 'pzt_l') -> str:
+    return patch_window_expr(position['theta_deg'], position['z_mm'], width_name, length_name)
+
+
+def receiver_weighted_average_expr(position: dict, operator: str = RECEIVER_INTEGRATION_OPERATOR) -> str:
+    window = receiver_window_expr(position)
+    radial = radial_displacement_expr(position)
+    return f'{operator}(({window})*({radial}))/({operator}({window}))'
+
+
+def receiver_weighted_average_expressions() -> list[str]:
+    return [receiver_weighted_average_expr(position) for position in receiver_positions()]
+
+
 def add_parameters(model, damaged: bool) -> None:
     params = {
         'L_pipe': (f'{PIPE.length_mm:.9g}[mm]', 'Pipe length'),
@@ -195,6 +217,7 @@ def add_parameters(model, damaged: bool) -> None:
         'Rm': (f'{PIPE.mid_radius_mm:.9g}[mm]', 'Shell midsurface radius'),
         'h0': (f'{PIPE.wall_thickness_mm:.9g}[mm]', 'Nominal shell thickness'),
         'h_min': ('1[mm]', 'Minimum shell thickness used in defect expressions'),
+        'defect_loss_max': (f'{DEFECT_LOSS_MAX_MM:.9g}[mm]', 'Maximum local wall-loss depth used to avoid overly severe defects'),
         'rho_al': (f'{MATERIAL.density_kg_m3:.9g}[kg/m^3]', 'Aluminum density'),
         'E_al': (f'{MATERIAL.young_gpa:.9g}[GPa]', 'Aluminum Young modulus'),
         'nu_al': (f'{MATERIAL.poisson:.9g}', 'Aluminum Poisson ratio'),
@@ -302,7 +325,7 @@ def defect_window_expr(defect: DefectConfig | DefectLobeConfig) -> str:
     radius_z_mm = defect.radius_z_mm or defect.radius_mm
     rt = f'{radius_theta_mm:.9g}[mm]'
     rz = f'{radius_z_mm:.9g}[mm]'
-    return f'exp(-((({ds})/({rt}))^2+(({dz})/({rz}))^2)^4)'
+    return f'exp(-((({ds})/({rt}))^2+(({dz})/({rz}))^2)^{DEFECT_WINDOW_POWER})'
 
 
 def thickness_loss_expression(defects: list[DefectConfig], lobes: list[DefectLobeConfig]) -> str:
@@ -322,7 +345,8 @@ def thickness_loss_expression(defects: list[DefectConfig], lobes: list[DefectLob
 def thickness_expression(defects: list[DefectConfig], lobes: list[DefectLobeConfig]) -> str:
     if not defects and not lobes:
         return 'h0'
-    return f'max(h_min,h0-({thickness_loss_expression(defects, lobes)}))'
+    loss = thickness_loss_expression(defects, lobes)
+    return f'max(h_min,h0-min(defect_loss_max,({loss})))'
 
 
 def shell_offset_relative_expression(thickness: str) -> str:
@@ -435,6 +459,41 @@ def create_shell_physics(model, geometry, shell_selection, defects: list[DefectC
         'centers are listed in the generated metadata and build log.'
     )
     return shell
+
+
+def create_receiver_average_operator(model, shell_selection) -> None:
+    component = model.java.component('comp1')
+    coupling = component.cpl()
+    tags = set(coupling.tags())
+    if RECEIVER_INTEGRATION_OPERATOR not in tags:
+        coupling.create(RECEIVER_INTEGRATION_OPERATOR, 'Integration')
+    operator = component.cpl(RECEIVER_INTEGRATION_OPERATOR)
+    operator.label('receiver patch weighted shell integration')
+    operator.selection().named(shell_selection.tag())
+
+
+def create_receiver_average_evaluation(model) -> None:
+    tables = model / 'tables'
+    table = tables.create('Table', name='receiver weighted average radial displacement table')
+    evaluation = (model / 'evaluations').create(
+        'EvalGlobal',
+        name='receiver patch weighted average radial displacement',
+    )
+    positions = receiver_positions()
+    evaluation.property('probetag', 'none')
+    evaluation.property('table', table)
+    evaluation.property('expr', receiver_weighted_average_expressions())
+    evaluation.property('unit', ['m'] * len(positions))
+    evaluation.property('descr', [
+        f'PZT {position["index"]:02d} patch weighted average radial displacement'
+        for position in positions
+    ])
+    evaluation.comment(
+        'Receiver channels are small patch-weighted averages on the shell '
+        f'boundary using {RECEIVER_INTEGRATION_OPERATOR}. Each channel evaluates '
+        'intop_shell(w_rx*(cos(theta_rx)*u+sin(theta_rx)*v))/intop_shell(w_rx), '
+        'with the receiver window centered at the configured PZT position.'
+    )
 
 
 def create_mesh(model, geometry, shell_selection):
@@ -589,6 +648,8 @@ def build_model_object(
     create_material(model)
     create_functions(model)
     create_shell_physics(model, geometry, shell_selection, defects, lobes)
+    create_receiver_average_operator(model, shell_selection)
+    create_receiver_average_evaluation(model)
     create_mesh(model, geometry, shell_selection)
     create_study(model)
     create_receiver_datasets(model)
@@ -645,7 +706,7 @@ def write_build_log(path: Path, saved: Iterable[Path], problems: dict[str, objec
 - Pipe is a cylindrical shell midsurface at `Rm = {(PIPE.mid_radius_mm):.3f} mm`.
 - Wall loss defects are represented by spatially varying shell thickness, not Boolean corrosion cuts.
 - PZT solids are removed. Excitation is an equivalent face load with a smooth transducer window.
-- Receivers are 16 shell displacement points on the receiver ring.
+- Receivers are 16 patch-weighted shell displacement averages on the receiver ring.
 - Mesh is controlled by wavelength: `hmax = {MESH.hmax_mm:.3f} mm`, not by PZT block dimensions.
 
 ## Where to find the important settings in COMSOL Model Builder
@@ -655,9 +716,10 @@ def write_build_log(path: Path, saved: Iterable[Path], problems: dict[str, objec
 - Equivalent excitation: `Component 1 > Shell Mechanics > equivalent transducer face load`.
 - Active transmitter/frequency: `Global Definitions > Parameters`, then `tx` and `pzt_fc`.
 - Excitation pulse: `Global Definitions > Functions > five-cycle Hanning sine`.
-- Receiver points: `Results > Datasets > receiver PZT 17 point` through `receiver PZT 32 point`.
+- Receiver weighted averages: `Results > Derived Values > receiver patch weighted average radial displacement`.
+- Optional receiver point markers: `Results > Datasets > receiver PZT 17 point` through `receiver PZT 32 point`.
 
-The excitation patches are not separate geometric PZT faces. Their positions are encoded in the face-load expression as smooth spatial windows so they do not force local mesh refinement.
+The excitation and receiver patches are not separate geometric PZT faces. Their positions are encoded as smooth spatial windows so they do not force local mesh refinement.
 
 ## Receiver points
 
@@ -693,6 +755,12 @@ def model_metadata(dataset: str, defect_state: str, model_path: Path | str | Non
         },
         'sweep': asdict(SWEEP),
         'receiver_indices': list(RECEIVER_INDICES),
+        'receiver_model': {
+            'type': 'patch_weighted_average',
+            'integration_operator': RECEIVER_INTEGRATION_OPERATOR,
+            'window': 'same super-Gaussian shell window form as the equivalent PZT load',
+            'expression': 'intop_shell(w_rx*(cos(theta_rx)*u+sin(theta_rx)*v))/intop_shell(w_rx)',
+        },
         'create_receiver_datasets': CREATE_RECEIVER_DATASETS,
         'create_visual_marker_datasets': CREATE_VISUAL_MARKER_DATASETS,
         'position_perturbations': POSITION_PERTURBATIONS,

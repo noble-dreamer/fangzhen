@@ -16,6 +16,8 @@ import numpy as np
 DEFAULT_THETA_COUNT = 512
 DEFAULT_Z_COUNT = 512
 DEFAULT_H_MIN_MM = 1.0
+DEFAULT_DEFECT_LOSS_MAX_MM = 5.0
+DEFAULT_DEFECT_WINDOW_POWER = 2
 DEFAULT_MASK_THRESHOLD_MM = 0.01
 DEFAULT_COLORMAP = 'viridis'
 
@@ -158,7 +160,7 @@ def _component_loss_mm(
     rz = _radius_z_mm(item)
     ds = pipe.mid_radius_mm * np.deg2rad(circular_delta_deg(theta_grid_deg, theta0))
     dz = z_grid_mm - z0
-    window = np.exp(-((ds / rt) ** 2 + (dz / rz) ** 2) ** 4)
+    window = np.exp(-((ds / rt) ** 2 + (dz / rz) ** 2) ** DEFAULT_DEFECT_WINDOW_POWER)
     return depth * window
 
 
@@ -168,6 +170,7 @@ def build_depth_map(
     theta_count: int = DEFAULT_THETA_COUNT,
     z_count: int = DEFAULT_Z_COUNT,
     h_min_mm: float = DEFAULT_H_MIN_MM,
+    defect_loss_max_mm: float = DEFAULT_DEFECT_LOSS_MAX_MM,
 ) -> dict[str, np.ndarray | float | list[dict[str, Any]]]:
     """Build the same thickness-loss field used by the shell model.
 
@@ -189,13 +192,17 @@ def build_depth_map(
 
     max_wall_loss_mm = max(pipe.wall_thickness_mm - h_min_mm, 0.0)
     if max_wall_loss_mm > 0.0:
-        depth_mm = np.minimum(depth_mm, max_wall_loss_mm)
+        depth_limit_mm = min(max_wall_loss_mm, defect_loss_max_mm)
+        depth_mm = np.minimum(depth_mm, depth_limit_mm)
+    else:
+        depth_limit_mm = 0.0
 
     return {
         'theta_deg': theta_deg,
         'z_mm': z_mm,
         'depth_mm': depth_mm.astype(np.float32),
         'max_wall_loss_mm': float(max_wall_loss_mm),
+        'depth_limit_mm': float(depth_limit_mm),
         'defects': defects,
         'lobes': lobes,
     }
@@ -313,8 +320,10 @@ def write_label_package(
     theta_count: int = DEFAULT_THETA_COUNT,
     z_count: int = DEFAULT_Z_COUNT,
     h_min_mm: float = DEFAULT_H_MIN_MM,
+    defect_loss_max_mm: float = DEFAULT_DEFECT_LOSS_MAX_MM,
     mask_threshold_mm: float = DEFAULT_MASK_THRESHOLD_MM,
     preview_max_mm: float | None = None,
+    write_preview_png: bool = True,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     label = build_depth_map(
@@ -323,6 +332,7 @@ def write_label_package(
         theta_count=theta_count,
         z_count=z_count,
         h_min_mm=h_min_mm,
+        defect_loss_max_mm=defect_loss_max_mm,
     )
     depth_mm = np.asarray(label['depth_mm'], dtype=np.float32)
     max_wall_loss_mm = float(label['max_wall_loss_mm'])
@@ -342,14 +352,22 @@ def write_label_package(
     np.save(mask_path, mask)
     theta_deg = np.asarray(label['theta_deg'], dtype=np.float32)
     z_mm = np.asarray(label['z_mm'], dtype=np.float32)
-    used_preview_max_mm = save_depth_png(
-        depth_mm,
-        png_path,
-        theta_deg=theta_deg,
-        z_mm=z_mm,
-        title=f'{stem} defect depth label',
-        preview_max_mm=preview_max_mm,
-    )
+    if write_preview_png:
+        used_preview_max_mm = save_depth_png(
+            depth_mm,
+            png_path,
+            theta_deg=theta_deg,
+            z_mm=z_mm,
+            title=f'{stem} defect depth label',
+            preview_max_mm=preview_max_mm,
+        )
+        preview_png = str(png_path)
+    else:
+        if preview_max_mm is None:
+            used_preview_max_mm = max(max_wall_loss_mm, 1e-12)
+        else:
+            used_preview_max_mm = max(float(preview_max_mm), 1e-12)
+        preview_png = None
 
     metadata = {
         'sample_id': stem,
@@ -380,16 +398,21 @@ def write_label_package(
         },
         'h_min_mm': h_min_mm,
         'max_wall_loss_mm': max_wall_loss_mm,
+        'defect_loss_max_mm': defect_loss_max_mm,
+        'depth_limit_mm': float(label['depth_limit_mm']),
         'normalization_denominator_mm': norm_denominator,
         'mask_threshold_mm': mask_threshold_mm,
         'preview_max_mm': used_preview_max_mm,
         'preview_colormap': DEFAULT_COLORMAP,
-        'formula': 'sum(depth_mm * exp(-(((Rm*dtheta)/rt)^2 + ((z-z0)/rz)^2)^4)), clipped by h0-h_min',
+        'formula': (
+            f'sum(depth_mm * exp(-(((Rm*dtheta)/rt)^2 + ((z-z0)/rz)^2)^{DEFAULT_DEFECT_WINDOW_POWER})), '
+            'clipped by min(h0-h_min, defect_loss_max_mm)'
+        ),
         'files': {
             'depth_mm_npy': str(depth_path),
             'depth_norm_npy': str(norm_path),
             'mask_npy': str(mask_path),
-            'preview_png': str(png_path),
+            'preview_png': preview_png,
             'metadata_json': str(meta_path),
         },
         'defect_count': len(label['defects']),

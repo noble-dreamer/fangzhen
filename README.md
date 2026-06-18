@@ -7,7 +7,7 @@
 - 管道用 Shell 物理场，几何是圆柱中面。
 - PZT 不再建实体，改为等效面载荷窗口。
 - 缺陷不做几何切割，改为壳厚度局部减薄。
-- 接收端为 16 个接收点的径向位移时域信号。
+- 接收端为 16 个接收 PZT patch 的小面积加权平均径向位移时域信号。
 - 网格按最短波长控制，不按 PZT 厚度细化。
 
 主要脚本：
@@ -16,7 +16,7 @@
 - `simple_defect_common.py`: 随机缺陷采样公共模块，生成多缺陷/凸瓣并转换成 shell 厚度减薄配置。
 - `defect_label_common.py`: 根据缺陷 metadata 重建展开 `theta-z` 厚度损失标签图，并提供相关系数、NRMSE、mask IoU 评价函数。
 - `export_defect_labels.py`: 不调用 COMSOL，从已有 metadata 批量导出 `.npy` 标签、带坐标/色标的 `.png` 展开预览和 montage。
-- `streaming_export_common.py`: 流式求解、接收点导出、特征提取、manifest 和 progress 日志公共模块。
+- `streaming_export_common.py`: 流式求解、接收 patch 加权平均导出、特征提取、manifest 和 progress 日志公共模块。
 - `build_dataset_a_healthy.py`: 构建 Dataset A 理想健康 MPH，不求解；用于模型树检查。
 - `build_dataset_b_healthy.py`: 构建 Dataset B 带材料/位置/幅值扰动的健康 MPH，不求解；用于模型树检查。
 - `generate_dataset_a_defects.py`: 构建 Dataset A 随机缺陷 MPH，不求解；用于模型树检查。
@@ -26,9 +26,9 @@
 - `solve_export_dataset_a_training_streaming.py`: Dataset A 训练集流式脚本，随机多缺陷/不规则外表面腐蚀缺陷。
 - `solve_export_dataset_b_streaming.py`: Dataset B 流式求解导出脚本，保留自由端和真实实验扰动。
 - `export_simple_waveforms.py`: 对已求解的 MPH 导出 16 路时域径向位移 CSV；不推荐大批量使用。
-- `inspect_simple_model.py`: 检查接收点、参数扫描和网格设置。
+- `inspect_simple_model.py`: 检查接收端、参数扫描和网格设置。
 - `check_simple_solution_response.py`: 对已求解 MPH 检查接收通道是否有非零响应。
-- `debug_shell_model_tree.py`: 打印材料、壳厚、载荷、接收点等模型树关键属性。
+- `debug_shell_model_tree.py`: 打印材料、壳厚、载荷、接收端等模型树关键属性。
 - `debug_shell_load_fields.py`: 打印 Shell `FaceLoad` 节点字段，用于确认等效载荷写入位置。
 - `debug_shell_feature_types.py`: 探测 COMSOL 6.4 Shell 支持的 feature 类型；已确认 Shell 不能直接创建 Solid 的 `Low-Reflecting Boundary`。
 - `debug_shell_thickness_fields.py`: 打印 `ThicknessOffset` 字段，用于确认外表面腐蚀的 offset 表达式。
@@ -129,7 +129,7 @@ conda run --no-capture-output -n comsol python -u simple/solve_export_dataset_a_
 
 流式输出目录内部约定：
 
-- `csv/waveforms/`: 每个 `sample + tx + frequency` 的 16 路接收波形 CSV。
+- `csv/waveforms/`: 每个 `sample + tx + frequency` 的 16 路接收 patch 加权平均波形 CSV。
 - `csv/tomography_features/`: TOF、包络峰值、FFT 相位/幅值、螺旋阶次窗口等特征 CSV。
 - `metadata/`: 样本级 JSON，记录缺陷、材料、吸收层、扰动、输出文件和 COMSOL self-check。
 - `labels/`: 展开的管外表面 `theta-z` 缺陷标签，包括深度 `.npy`、mask、归一化深度图、metadata 和预览 PNG。
@@ -139,13 +139,28 @@ conda run --no-capture-output -n comsol python -u simple/solve_export_dataset_a_
 新构建的 MPH 还会在 `Results > Datasets` 里包含两个仅用于检查显示的点集：
 
 - `transmitter PZT marker points`: 左侧 16 个等效发射载荷中心。
-- `receiver PZT marker points`: 右侧 16 个接收点中心。
+- `receiver PZT marker points`: 右侧 16 个接收 patch 中心。
 
 这两个点集只是后处理数据集，不参与几何、网格、物理场和求解。COMSOL 里可在 `3D Plot Group` 下添加 `More Plots > Point`，分别选择这两个数据集，用不同颜色/符号叠加到管表面位移图上检查位置。
 
 Dataset A 的 simple 壳模型默认开启两端轴向渐变 Rayleigh 阻尼吸收层，用于抑制端部反射。COMSOL 6.4 的 Shell 物理场不能直接创建 Solid Mechanics 的 `Low-Reflecting Boundary` 节点，因此这里采用壳模型可运行的 absorbing-layer 代理方案。
 
 缺陷默认按外表面腐蚀处理：壳厚度局部减薄，同时 damaged 模型在缺陷区设置 thickness offset，使内表面位置近似保持不变、外表面向内腐蚀。健康模型仍为中面无偏置。
+
+当前缺陷不是几何布尔切割，也不是二值硬边界坑，而是连续的厚度损失场。每个主缺陷在展开管面上用一个超高斯窗口定义：
+
+```text
+loss(theta,z) = depth * exp(-(((ds/r_theta)^2 + (dz/r_z)^2)^2))
+ds = Rm * wrapped_delta_theta
+```
+
+多个主缺陷和少量浅凸瓣的厚度损失相加，最后通过 `max(h_min, h0 - min(defect_loss_max, loss))` 限制最小壳厚和最大局部壁厚损失。当前 `defect_loss_max = 5 mm`，避免深度过大导致过强频散和过强局部散射。这个表达式在中心附近接近给定深度，在边缘连续衰减到 0，因此边缘是平滑的，不会出现阶梯突变或几何尖角。COMSOL 中的壳厚表达式和 `labels/*_defect_depth_mm.npy` 使用同一套公式，所以仿真缺陷和训练标签是一致的。
+
+Dataset A validation 使用单个规则圆形/椭圆超高斯腐蚀坑，适合检查定位和幅值趋势。Dataset A training 和频域随机样本默认每个样本生成 1-3 个主缺陷，采用尺寸混合策略：单缺陷样本可以是大/中/小任意尺度，多缺陷样本优先生成大+中、大+小或大+中+小组合，避免每张标签都由多个大缺陷主导普通 MSE/L1 loss。当前小缺陷直径约 50-95 mm，中缺陷约 95-170 mm，大缺陷约 170-240 mm；主缺陷深度约 0.8-4.2 mm，并且局部累计最大厚度损失不超过 5 mm。每个主缺陷只允许 0-1 个浅 lobe，小缺陷默认不加 lobe，lobe 深度约为主缺陷深度的 6%-16%，用于轻微打破完美圆形，而不是制造许多内部尖峰。training 和频域脚本的椭圆长宽比约 0.75-1.45，因此训练集缺陷以平滑外表面减薄区域为主，同时覆盖小、中、大不同尺度。
+
+此前默认每个主缺陷可叠加 4-8 个 lobe，多个主缺陷时总 lobe 数可能达到 20 个以上。虽然这些 lobe 的边缘仍是连续的，但内部会出现多个局部峰值，会让 diffusion 同时学习“缺陷定位”和“复杂内部纹理”，训练难度更大，也容易让频域粗图被少数强散射区域主导。新策略故意减少 lobe 数量和深度，使缺陷更接近缓慢腐蚀减薄的大尺度“碗形/浅盘形”区域。
+
+从物理外观上看，这种缺陷更接近“磨蚀/腐蚀导致的缓慢减薄区域”，而不是裂纹、针孔、尖锐坑蚀或台阶状机械加工缺口。它符合许多表面腐蚀缺陷的两个重要特征：厚度连续变化、边缘没有无限陡峭的硬切边。但它仍是代理模型：没有显式粗糙表面、多个微小坑的随机纹理、腐蚀产物、局部材料参数变化，也没有真实电化学腐蚀形成的多尺度边界。因此它适合用于第一阶段 guided-wave 层析和 diffusion 学习“平滑外表面壁厚损失”的位置/形状先验；若目标是小尺度点蚀、尖锐裂纹或强粗糙边界，需要后续增加更高频/更细网格或新的缺陷生成器。
 
 `generate_defect/show_defect.png` 里的旧图是把管外表面展开成板后的腐蚀深度图。`simple` 当前缺陷与它在坐标意义上一致，都是外表面 `theta-z` 厚度损失；区别是旧 MATLAB 代码生成的是随机阶梯坑和二值边界平滑，`simple` 使用和 COMSOL 壳模型完全一致的超高斯厚度减薄场加可选凸瓣。因此训练标签应优先使用 `simple` 导出的标签，而不是仅追求旧图外观一致。
 
@@ -171,7 +186,7 @@ conda run -n comsol python simple/generate_dataset_a_defects.py
 conda run -n comsol python simple/export_simple_waveforms.py --model simple/output/dataset_a_shell/pipe_shell_healthy.mph --output-root simple/output/dataset_a_shell --sample-id pipe_shell_healthy --tx 1 --frequencies 50000
 ```
 
-`build_dataset_a_healthy.py` 和流式 Dataset A 脚本都调用 `simple_shell_common.py` 的同一套建模函数，并使用同一类物理设置：壳几何、材料、两端 absorbing layer、外表面腐蚀约定、等效 PZT 面载荷、16 个接收点和默认求解器配置。区别在于：
+`build_dataset_a_healthy.py` 和流式 Dataset A 脚本都调用 `simple_shell_common.py` 的同一套建模函数，并使用同一类物理设置：壳几何、材料、两端 absorbing layer、外表面腐蚀约定、等效 PZT 面载荷、16 个接收 patch 加权平均和默认求解器配置。区别在于：
 
 - `build_dataset_a_healthy.py` 生成一个健康管 MPH，保留 16 x 3 参数扫描设置，但 `solve=False`，用于打开 COMSOL 检查模型树和参数配置。
 - `solve_export_dataset_a*_streaming.py` 每次只建立一个 `tx + frequency` 工况，立即求解、导出 CSV/特征/metadata/labels，然后清理模型，不保存含解 MPH。
@@ -190,7 +205,7 @@ conda run -n comsol python simple/export_simple_waveforms.py --model simple/outp
 2. 建模时把本次要跑的全部 tx 写入等效载荷表达式，但不建立 COMSOL 参数化扫描。
 3. 对每个工况只修改全局参数 `tx` 和 `pzt_fc`。
 4. 求解当前工况。
-5. 直接从当前解对象中导出 16 路接收点径向位移和特征 CSV。
+5. 直接从当前解对象中导出 16 路接收 patch 加权平均径向位移和特征 CSV。
 6. 调用 COMSOL solution 的 `clearSolutionData()` 清除当前瞬态场解，保留几何、网格和 solver tree。
 7. 进入下一个工况；样本结束后 `client.remove(model)` 并默认 `client.clear()`。
 
@@ -199,7 +214,7 @@ conda run -n comsol python simple/export_simple_waveforms.py --model simple/outp
 这种方式不会保存含瞬态场解的 `.mph` 文件，输出目录中也不会有
 `models/*.mph`。保留的内容是：
 
-- `csv/waveforms/*_waveforms.csv`: 16 路接收点时域位移。
+- `csv/waveforms/*_waveforms.csv`: 16 路接收 patch 加权平均时域径向位移。
 - `csv/tomography_features/*_tomography_features.csv`: TOF、Hilbert 峰值、FFT 幅值/相位等。
 - `csv/tomography_features/*_helical_order_projections.csv`: 不同螺旋阶次窗口峰值。
 - `csv/tomography_features/*_receiver_summary.csv`: 接收通道摘要。
@@ -307,10 +322,13 @@ COMSOL recovery/temp 目录。
 - 当前激励编号：`Global Definitions > Parameters > tx`
 - 当前激励频率：`Global Definitions > Parameters > pzt_fc`
 - 激励脉冲函数：`Global Definitions > Functions > five-cycle Hanning sine`
-- 接收点：`Results > Datasets > receiver PZT 17 point` 到 `receiver PZT 32 point`
+- 接收加权平均：`Results > Derived Values > receiver patch weighted average radial displacement`
+- 可选接收点标记：`Results > Datasets > receiver PZT 17 point` 到 `receiver PZT 32 point`
 - 可视化标记点：`Results > Datasets > transmitter PZT marker points` 和 `receiver PZT marker points`
 
 注意：激励位置不是几何里的独立 PZT 面片。它们被写在 `equivalent transducer face load` 的 `F` 表达式里，通过以 `tx` 为开关的空间窗口函数激活对应发射点。这样做是为了避免 PZT 小尺寸强制局部加密网格。
+
+真实接收输出不是数学单点插值，而是使用 `intop_shell(w_rx*u_r)/intop_shell(w_rx)` 在接收 PZT patch 窗口内做小面积加权平均。`receiver PZT xx point` 这类 CutPoint 数据集主要用于打开模型时检查中心位置，不作为当前流式导出的主数据源。
 
 健康模型的厚度显示为 `h0`。缺陷模型的厚度显示为 `max(h_min, h0 - (...))`，其中括号里是多个缺陷/凸瓣对应的厚度减薄窗口。
 
@@ -324,85 +342,83 @@ COMSOL recovery/temp 目录。
 
 
 
- simple 模型计算完成后，COMSOL 里得到的是壳管道中面上的时域位移场。
+## 时域、频域与粗图/细图策略
 
-  具体来说，每个参数工况都会有一组时间序列解：
+当前正式流式脚本是时域瞬态求解。每个工况由一个发射端和一个中心频率定义：
 
-  tx = 某个发射点
-  pzt_fc = 某个频率
-  t = 0 : dt_out : t_end
+```text
+tx = 一个发射 PZT 编号，默认 1..16
+pzt_fc = 一个 tone-burst 中心频率，默认 40000, 50000, 60000 Hz
+t = 0 : dt_out : t_end
+```
 
-  当前默认是：
+COMSOL 求解时保存的是当前工况的壳中面时域位移场，包括全局 `u/v/w` 位移和 Shell 相关自由度。流式导出不会保存这些大体积场解，而是立即把每个接收 PZT patch 上的径向位移加权平均成 16 路时间信号：
 
-  tx = 1..16
-  pzt_fc = 40000, 50000, 60000 Hz
-  t = 0 到 0.8 ms
-  dt_out = 0.5 us
+```text
+u_r = cos(theta_rx) * u + sin(theta_rx) * v
+rx_channel(t) = intop_shell(w_rx * u_r) / intop_shell(w_rx)
+```
 
-  也就是一个模型里最多有：
+因此 `csv/waveforms/*_waveforms.csv` 是后续时域层析和螺旋阶次分析最直接的数据。时域数据保留了传播先后顺序，所以可以提取首波 TOF、包络峰值时间，以及 Γ0、Γ1、Γ-1 等螺旋路径附近的窗口峰值。
 
-  16 × 3 = 48 个时域工况
+频域扫描得到的是另一个物理量：在某个频率下的稳态复响应 `H(tx, rx, f)`。它有明确物理意义，适合画幅值、相位、实部、虚部、健康-损伤复差分和多频堆叠图；但稀疏频域点本身没有时间轴，不能直接给出 Γ0、Γ1、Γ-1 的到达时间。只有在规则且足够密集的频率网格上求得宽带复频响，并做反傅里叶变换时，才可能重建近似时域波形；这会需要较多频点，速度优势会下降。
 
-  每个工况里，COMSOL 存的是整个壳面上的位移自由度，比如：
+推荐的数据生成分工：
 
-- u：全局 X 方向位移
-- v：全局 Y 方向位移
-- w：全局 Z 方向位移
-- Shell 相关转角/壳自由度
+- 时域流式数据：作为高保真物理基准，提取 TOF、Hilbert 包络、螺旋阶次窗口峰值和少量训练/验证样本。
+- 频域扫描数据：作为低成本粗图来源，使用 `abs(H_damaged - H_healthy)`、`angle(H_damaged * conj(H_healthy))`、多频幅值差分等形成 `tx-rx-frequency` 特征图。
+- diffusion 粗图到细图：不要只依赖单频 `abs(H)`。更稳妥的粗图输入应包含健康-损伤差分、多频信息和相位差；细图监督标签使用 `labels/*_defect_depth_norm.npy` 或 `labels/*_defect_depth_mm.npy`。
+- 如果目标必须包含 Γ0/Γ±1 到达时间或波包传播顺序，粗图仍应来自时域 CSV 或由密集频响反变换得到的时域波形，而不是稀疏频域扫描。
 
-  这些是场数据，不是直接的 CSV 表格。你在 COMSOL 里看到的是“某个时刻整个管壁怎么振动”。
+一个实用方案是：用少量时域 COMSOL 数据生成可靠标签和螺旋阶次特征；用更多频域样本生成多频粗图；训练时把频域粗图作为条件输入，把 `labels/` 中的厚度损失图作为目标。这样频域负责扩大样本量，时域负责校准和验证物理时间特征。
 
-  simple 模型中数据代表什么：
+## 流式输出数据字典
 
-- 管道：等效壳中面，不是 3D 实体厚壁管。
-- 缺陷：局部厚度减薄导致的波速/散射变化。
-- 激励：某个发射点位置的等效径向面载荷。
-- 接收：16 个接收点处的径向位移。
-- 信号单位：位移，单位是 m。
+`csv/waveforms/<sample>_txXX_fYYYYYHz_waveforms.csv` 每个文件对应一个 `sample + tx + frequency` 工况。
 
-  导出脚本 simple/export_simple_waveforms.py 做的事情是：
-  从 COMSOL 的场解中，在 16 个接收点取值，并把全局位移分量投影成径向位移：
+| 字段 | 含义 | 单位/备注 |
+| --- | --- | --- |
+| `time_s` | 时域采样时刻 | s |
+| `rx01_ur_m` 到 `rx16_ur_m` | 16 个接收 PZT patch 的径向位移加权平均 | m；`rx01` 对应 PZT17，`rx16` 对应 PZT32 |
 
-  ur = cos(theta) * u + sin(theta) * v
+`csv/tomography_features/<sample>_tomography_features.csv` 每行对应一个 `tx + frequency + rx_channel`。
 
-  所以导出的 CSV 是16 路接收点径向位移随时间变化的波形。
+| 字段 | 含义 | 用途 |
+| --- | --- | --- |
+| `sample_id` | 样本名 | 关联 metadata/labels |
+| `tx` | 发射 PZT 编号 | 当前激励端 |
+| `rx_channel` | 接收通道 1..16 | CSV 内通道编号 |
+| `rx_pzt` | 实际接收 PZT 编号 17..32 | 几何位置索引 |
+| `frequency_hz` | tone-burst 中心频率 | Hz |
+| `tof_first_s` | Hilbert 包络首次超过阈值的时间 | 粗 TOF 特征，受 `--threshold-ratio` 影响 |
+| `hilbert_peak_amplitude_m` | 全时窗 Hilbert 包络最大值 | 幅值型特征 |
+| `hilbert_peak_time_s` | 全时窗 Hilbert 包络最大值出现时间 | 峰值到达时间 |
+| `fft_bin_hz` | 最接近 `frequency_hz` 的 FFT 频点 | 由导出时域信号计算 |
+| `fft_amplitude_m` | 该 FFT 频点的幅值估计 | 频域幅值特征 |
+| `fft_phase_rad` | 该 FFT 频点相位 | rad |
+| `max_abs_displacement_m` | 时域绝对位移最大值 | m |
+| `healthy_minus_current_peak_m` | 健康包络峰值减当前包络峰值 | 只有传入健康波形时有效，否则为 NaN |
+| `waveform_csv` | 来源波形文件名 | 可回溯原始 CSV |
 
-  导出后一个 CSV 大概长这样：
+`csv/tomography_features/<sample>_helical_order_projections.csv` 每行对应一个 `tx + frequency + rx_channel + helical_order`。
 
-  time_s,rx01_ur_m,rx02_ur_m,...,rx16_ur_m
-  0,0.000000000000e+00,0.000000000000e+00,...,0.000000000000e+00
-  5e-07,1.23e-12,8.91e-13,...,-2.10e-13
-  1e-06,3.45e-12,1.02e-12,...,-4.33e-13
-  ...
-  8e-04,...
+| 字段 | 含义 | 用途 |
+| --- | --- | --- |
+| `helical_order` | 螺旋路径阶次，当前为 `-1, 0, 1` | Γ-1、Γ0、Γ1 的简化路径编号 |
+| `predicted_arrival_s` | 按几何路径和 `--group-velocity` 估计的到达时间 | s；不是 COMSOL 自动识别结果 |
+| `window_half_width_s` | 在预测到达时间两侧搜索峰值的半窗宽 | s；来自 `--window-us` |
+| `order_peak_amplitude_m` | 该螺旋阶次窗口内 Hilbert 包络峰值 | m |
+| `order_peak_time_s` | 该窗口峰值出现时间 | s |
 
-  文件命名例如：
+`csv/tomography_features/<sample>_receiver_summary.csv` 每行对应一个 `tx + frequency + rx_channel`，用于快速查看接收端位置和主要响应。
 
-  pipe_shell_healthy_tx01_f50000Hz_waveforms.csv
+| 字段 | 含义 |
+| --- | --- |
+| `theta_deg`, `x_mm`, `y_mm`, `z_mm` | 接收 patch 中心位置 |
+| `max_abs_displacement_m` | 该通道时域最大绝对位移 |
+| `hilbert_peak_amplitude_m`, `hilbert_peak_time_s` | 该通道全时窗包络峰值和时间 |
+| `tof_first_s` | 该通道首波阈值到达时间 |
 
-  含义是：
+`metadata/<sample>.json` 是样本级记录，包含缺陷参数、材料参数、求解设置、每个工况的 COMSOL problems、`waveform_check`、输出文件列表和标签文件路径。`waveform_check.finite=true` 且 `nonzero_channels=16/16` 是最基本的导出有效性检查。
 
-- tx01：第 1 个发射点激励
-- f50000Hz：50 kHz 激励
-- rx01..rx16：16 个接收通道，对应 PZT17..PZT32
-- 每一行：一个时间点
-- 每一列：一个接收通道的径向位移
-
-  如果你导出完整默认扫描，会得到 48 个 CSV：
-
-  16 个 tx × 3 个频率 = 48 个波形文件
-
-  这些 CSV 才是后续层析反演最直接用的数据。后面可以再从这些波形里提取：
-
-- TOF 到达时间
-- Hilbert 包络峰值
-- FFT 幅值/相位
-- 健康-缺陷差分幅值
-- 不同螺旋阶次的波包幅值
-
-  简单总结：
-
-  COMSOL 计算结果 = 整个壳管道的时域位移场
-  export 导出结果 = 16 个接收点的径向位移时域波形 CSV
-
-  对于你的 diffusion 数据集流程，建议保存和训练的主输入先用导出的 CSV 或由 CSV 提取的层析特征，监督标签使用 `labels/*_defect_depth_mm.npy` 或归一化后的 `labels/*_defect_depth_norm.npy`，不要直接依赖 MPH 里的全场数据。
+`labels/` 是监督标签包。核心文件是 `*_defect_depth_mm.npy` 和 `*_defect_depth_norm.npy`，数组形状为 `(z_index, theta_index)`，可直接作为 diffusion 或其他图像模型的目标细图。

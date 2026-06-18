@@ -19,7 +19,7 @@ Dataset B simple shell: realistic healthy baseline
 - Pipe is a cylindrical shell midsurface at `Rm = 155.000 mm`.
 - Wall loss defects are represented by spatially varying shell thickness, not Boolean corrosion cuts.
 - PZT solids are removed. Excitation is an equivalent face load with a smooth transducer window.
-- Receivers are 16 shell displacement points on the receiver ring.
+- Receivers are 16 patch-weighted shell displacement averages on the receiver ring.
 - Mesh is controlled by wavelength: `hmax = 5.208 mm`, not by PZT block dimensions.
 
 ## Where to find the important settings in COMSOL Model Builder
@@ -29,9 +29,10 @@ Dataset B simple shell: realistic healthy baseline
 - Equivalent excitation: `Component 1 > Shell Mechanics > equivalent transducer face load`.
 - Active transmitter/frequency: `Global Definitions > Parameters`, then `tx` and `pzt_fc`.
 - Excitation pulse: `Global Definitions > Functions > five-cycle Hanning sine`.
-- Receiver points: `Results > Datasets > receiver PZT 17 point` through `receiver PZT 32 point`.
+- Receiver weighted averages: `Results > Derived Values > receiver patch weighted average radial displacement`.
+- Optional receiver point markers: `Results > Datasets > receiver PZT 17 point` through `receiver PZT 32 point`.
 
-The excitation patches are not separate geometric PZT faces. Their positions are encoded in the face-load expression as smooth spatial windows so they do not force local mesh refinement.
+The excitation and receiver patches are not separate geometric PZT faces. Their positions are encoded as smooth spatial windows so they do not force local mesh refinement.
 
 ## Receiver points
 

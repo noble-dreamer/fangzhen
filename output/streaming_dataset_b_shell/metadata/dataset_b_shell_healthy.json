@@ -91,6 +91,12 @@
       31,
       32
     ],
+    "receiver_model": {
+      "type": "patch_weighted_average",
+      "integration_operator": "intop_shell",
+      "window": "same super-Gaussian shell window form as the equivalent PZT load",
+      "expression": "intop_shell(w_rx*(cos(theta_rx)*u+sin(theta_rx)*v))/intop_shell(w_rx)"
+    },
     "create_receiver_datasets": false,
     "create_visual_marker_datasets": false,
     "position_perturbations": {
@@ -264,7 +270,7 @@
           "frequency_hz": 50000.0,
           "build_problems": [],
           "post_solve_problems": [],
-          "solve_elapsed_s": 293.26600000000326,
+          "solve_elapsed_s": 272.5149999999994,
           "waveform_check": {
             "time_count": 41,
             "channel_count": 16,
@@ -272,24 +278,24 @@
             "nonzero_channels": 16,
             "dead_channels": [],
             "max_abs_per_channel_m": [
-              8.028238094096657e-10,
-              5.791179085932312e-10,
-              1.9681150279098951e-10,
-              2.0453436116771257e-10,
-              3.499111531953688e-10,
-              3.4176126871082856e-10,
-              2.2433262592003277e-10,
-              1.9145947438348613e-10,
-              1.9121444156311742e-10,
-              1.9042005731724742e-10,
-              2.2843449580172979e-10,
-              3.483772148579888e-10,
-              3.389375347311458e-10,
-              1.8837402327913946e-10,
-              2.0873664129715488e-10,
-              5.788858430005271e-10
+              8.009652086731485e-10,
+              5.740996551263811e-10,
+              1.9600287639772514e-10,
+              2.0088841567047966e-10,
+              3.4503865956165694e-10,
+              3.3782376837596143e-10,
+              2.2429569103026151e-10,
+              1.9130142305443425e-10,
+              1.9100870737506704e-10,
+              1.9023799338479194e-10,
+              2.2845792807713304e-10,
+              3.4406200638451334e-10,
+              3.337741372770587e-10,
+              1.8462010220848865e-10,
+              2.0794578288770637e-10,
+              5.744614669970871e-10
             ],
-            "global_max_abs_m": 8.028238094096657e-10
+            "global_max_abs_m": 8.009652086731485e-10
           },
           "waveform_csv": "D:\\lab_ultr\\fz\\simple\\output\\streaming_dataset_b_shell\\csv\\waveforms\\dataset_b_shell_healthy_tx01_f50000Hz_waveforms.csv",
           "solution_dataset": "dset1",

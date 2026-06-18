@@ -6,7 +6,11 @@
 
 # Exported waveform and feature tables.
 *.csv
-
+*.npz
+*.npy
+*.json
+*.txt
+*.png
 # Python caches and local runtime artifacts.
 __pycache__/
 *.py[cod]

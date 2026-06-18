@@ -98,6 +98,14 @@
     31,
     32
   ],
+  "receiver_model": {
+    "type": "patch_weighted_average",
+    "integration_operator": "intop_shell",
+    "window": "same super-Gaussian shell window form as the equivalent PZT load",
+    "expression": "intop_shell(w_rx*(cos(theta_rx)*u+sin(theta_rx)*v))/intop_shell(w_rx)"
+  },
+  "create_receiver_datasets": true,
+  "create_visual_marker_datasets": true,
   "position_perturbations": {},
   "amplitude_scale": {},
   "problems": []

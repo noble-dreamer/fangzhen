@@ -118,8 +118,8 @@ def main() -> None:
         if not args.only_healthy:
             sampling = defects.DefectSamplingConfig(
                 min_defects=1,
-                max_defects=4,
-                aspect_ratio_range=(0.6, 1.8),
+                max_defects=3,
+                aspect_ratio_range=(0.75, 1.45),
                 irregular_lobes=True,
             )
             for sample_id in range(args.start_id, args.start_id + args.samples):

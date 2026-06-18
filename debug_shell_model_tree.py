@@ -70,6 +70,26 @@ def main() -> None:
                 print(dataset.name(), dataset.tag(), selected_properties(
                     props, ['data', 'pointx', 'pointy', 'pointz', 'method', 'locdef']
                 ))
+
+        print('\nCOMPONENT COUPLINGS')
+        try:
+            component = model.java.component('comp1')
+            coupling = component.cpl()
+            for tag in coupling.tags():
+                feature = component.cpl(tag)
+                print(feature.label(), tag)
+                try:
+                    print(' selection:', list(feature.selection().entities(2)))
+                except Exception as error:
+                    print(' selection error:', type(error).__name__, error)
+        except Exception as error:
+            print(' coupling error:', type(error).__name__, error)
+
+        print('\nEVALUATIONS')
+        for evaluation in model / 'evaluations':
+            props = evaluation.properties()
+            print(evaluation.name(), evaluation.tag(), evaluation.type())
+            print('  ', selected_properties(props, ['data', 'expr', 'unit', 'descr', 'table']))
     finally:
         client.remove(model)
 
