@@ -33,6 +33,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metadata-dir", type=Path, default=cm.DEFAULT_METADATA_DIR)
     parser.add_argument("--label-dir", type=Path, default=cm.DEFAULT_LABEL_DIR)
     parser.add_argument("--config", type=Path, default=cm.ROOT / "configs" / "dataset_a_v1.json")
+    parser.add_argument(
+        "--grid-size",
+        type=int,
+        default=None,
+        help="Set both theta_count and z_count. Default comes from config, currently 256.",
+    )
+    parser.add_argument("--theta-count", type=int, default=None, help="Override theta grid count.")
+    parser.add_argument("--z-count", type=int, default=None, help="Override axial z grid count.")
     parser.add_argument("--threshold", type=float, default=0.05)
     parser.add_argument("--preview-first", type=int, default=0, help="Only write preview PNG for the first N samples.")
     parser.add_argument("--output-root", type=Path, default=cm.DEFAULT_OUTPUT_ROOT / "batch_frequency_selection_compare")
@@ -120,6 +128,12 @@ def evaluate_method(
     damaged_metadata_path = args.metadata_dir / f"{name}.json"
     damaged_metadata = cm.read_json(damaged_metadata_path) if damaged_metadata_path.exists() else {}
     config = cm.CoarseMapConfig.from_json(args.config if args.config.exists() else None)
+    config = cm.apply_grid_overrides(
+        config,
+        grid_size=args.grid_size,
+        theta_count=args.theta_count,
+        z_count=args.z_count,
+    )
     label_path = args.label_dir / f"{name}_defect_depth_norm.npy"
 
     def build_or_reuse(
@@ -132,7 +146,7 @@ def evaluate_method(
         x_path = case_root / "x_matrix" / f"{name}_x_matrix.npz"
         report_path = case_root / "reports" / f"{name}_coarse_maps_metrics.json"
         preview_path = case_root / "previews" / f"{name}_coarse_maps_preview.png"
-        if not (coarse_path.exists() and x_path.exists()):
+        if not (cm.coarse_map_matches_config(coarse_path, config) and x_path.exists()):
             coarse_path, x_path = compare_one.build_one(
                 healthy=healthy,
                 damaged=damaged,

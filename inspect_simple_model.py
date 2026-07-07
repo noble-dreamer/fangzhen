@@ -20,10 +20,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     paths = args.models or [
-        ROOT / 'output' / 'dataset_a_shell' / 'pipe_shell_healthy.mph',
-        ROOT / 'output' / 'dataset_b_shell' / 'pipe_shell_healthy.mph',
-        ROOT / 'output' / 'generated_dataset_a_shell' / 'models' / 'dataset_a_shell_sample_0001.mph',
-        ROOT / 'output' / 'generated_dataset_b_shell' / 'models' / 'dataset_b_shell_sample_0001.mph',
+        ROOT / 'output2' / 'dataset_a_shell' / 'pipe_shell_healthy.mph',
+        ROOT / 'output2' / 'dataset_b_shell' / 'pipe_shell_healthy.mph',
+        ROOT / 'output2' / 'generated_dataset_a_shell' / 'models' / 'dataset_a_shell_sample_0001.mph',
+        ROOT / 'output2' / 'generated_dataset_b_shell' / 'models' / 'dataset_b_shell_sample_0001.mph',
     ]
     client = mph.start(cores=1)
     try:

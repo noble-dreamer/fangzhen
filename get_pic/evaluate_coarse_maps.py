@@ -19,15 +19,36 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate coarse maps against labels.")
     parser.add_argument("--coarse", type=Path, nargs="+", required=True)
     parser.add_argument("--label", type=Path, default=None, help="Label npy. If omitted, infer from standard label dir.")
+    parser.add_argument(
+        "--label-dir",
+        type=Path,
+        default=cm.DEFAULT_LABEL_DIR,
+        help="Directory used to infer labels when --label is omitted.",
+    )
     parser.add_argument("--output-dir", type=Path, default=cm.DEFAULT_OUTPUT_ROOT / "reports")
     parser.add_argument("--threshold", type=float, default=0.05)
     parser.add_argument("--raw", action="store_true", help="Evaluate pic_raw instead of normalized pic.")
     return parser.parse_args()
 
 
-def infer_label_path(coarse_path: Path) -> Path:
+def infer_label_path(coarse_path: Path, label_dir: Path) -> Path:
     sample = coarse_path.name.replace("_coarse_maps.npz", "")
-    return cm.DEFAULT_LABEL_DIR / f"{sample}_defect_depth_norm.npy"
+    return label_dir / f"{sample}_defect_depth_norm.npy"
+
+
+def resize_label_nearest(label: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    if label.shape == target_shape:
+        return label
+    if label.ndim != 2:
+        raise RuntimeError(f"Label must be 2D, got shape {label.shape}")
+    target_z, target_theta = target_shape
+    source_z, source_theta = label.shape
+    if target_z <= 0 or target_theta <= 0:
+        raise RuntimeError(f"Invalid target label shape {target_shape}")
+    z_index = np.rint(np.linspace(0, source_z - 1, target_z)).astype(np.int64)
+    theta_index = np.floor(np.arange(target_theta) * source_theta / target_theta).astype(np.int64)
+    theta_index = np.clip(theta_index, 0, source_theta - 1)
+    return label[np.ix_(z_index, theta_index)].astype(np.float32, copy=False)
 
 
 def evaluate_one(coarse_path: Path, label_path: Path, threshold: float, raw: bool) -> dict:
@@ -38,8 +59,9 @@ def evaluate_one(coarse_path: Path, label_path: Path, threshold: float, raw: boo
     theta = np.asarray(data["theta_deg"], dtype=np.float32)
     z = np.asarray(data["z_mm"], dtype=np.float32)
     label = np.asarray(np.load(label_path), dtype=np.float32)
+    original_label_shape = tuple(int(value) for value in label.shape)
     if label.shape != pic.shape[1:]:
-        raise RuntimeError(f"{label_path} shape {label.shape} != coarse map shape {pic.shape[1:]}")
+        label = resize_label_nearest(label, pic.shape[1:])
     metrics = {}
     for index, name in enumerate(names):
         metrics[name] = {
@@ -53,6 +75,8 @@ def evaluate_one(coarse_path: Path, label_path: Path, threshold: float, raw: boo
     return {
         "coarse": str(coarse_path),
         "label": str(label_path),
+        "label_original_shape": list(original_label_shape),
+        "label_used_shape": list(label.shape),
         "map_key": key,
         "threshold": threshold,
         "metrics": metrics,
@@ -63,7 +87,7 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for coarse_path in args.coarse:
-        label_path = args.label or infer_label_path(coarse_path)
+        label_path = args.label or infer_label_path(coarse_path, args.label_dir)
         if not label_path.exists():
             raise FileNotFoundError(label_path)
         report = evaluate_one(coarse_path, label_path, args.threshold, args.raw)

@@ -18,7 +18,7 @@ import numpy as np
 
 
 EPS = 1e-30
-DEFAULT_RESPONSE_DIR = Path(__file__).resolve().parent / 'output' / 'streaming_dataset_a_frequency_shell' / 'frequency_response'
+DEFAULT_RESPONSE_DIR = Path(__file__).resolve().parent / 'output_dataset' / 'streaming_dataset_a_frequency_shell' / 'frequency_response'
 DEFAULT_DATASET_ROOT = DEFAULT_RESPONSE_DIR.parent
 DEFAULT_LABEL_DIR = DEFAULT_DATASET_ROOT / 'labels'
 DEFAULT_METADATA_DIR = DEFAULT_DATASET_ROOT / 'metadata'
@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help='Glob pattern(s) for damaged NPZ files. Relative patterns are checked from cwd and --response-dir.',
     )
-    parser.add_argument('--output-root', type=Path, default=Path(__file__).resolve().parent / 'output' / 'frequency_selection')
+    parser.add_argument('--output-root', type=Path, default=Path(__file__).resolve().parent / 'output_dataset' / 'frequency_selection')
     parser.add_argument('--top-n', type=int, default=15)
     parser.add_argument(
         '--metric',
@@ -84,6 +84,7 @@ def parse_args() -> argparse.Namespace:
             'absolute_l2',
             'phase_weighted',
             'physics_tomography',
+            'physics_highfreq_quota',
             'v1_label_guided',
         ),
         default='relative_l2',
@@ -172,6 +173,45 @@ def parse_args() -> argparse.Namespace:
         default='greedy_d_optimal',
         help='Frequency subset strategy. greedy_d_optimal is used only when Fisher matrices are available.',
     )
+    parser.add_argument(
+        '--highfreq-grid-size',
+        type=int,
+        default=96,
+        help='Theta/z grid size used by --metric physics_highfreq_quota for fast V1 focus scoring.',
+    )
+    parser.add_argument(
+        '--highfreq-sigma-ray-mm',
+        type=float,
+        default=25.0,
+        help='Ray-tube sigma used by --metric physics_highfreq_quota.',
+    )
+    parser.add_argument(
+        '--highfreq-low-max-khz',
+        type=float,
+        default=40.0,
+        help='Upper bound of low-frequency quota band for --metric physics_highfreq_quota.',
+    )
+    parser.add_argument(
+        '--highfreq-mid-max-khz',
+        type=float,
+        default=65.0,
+        help='Upper bound of mid-frequency quota band for --metric physics_highfreq_quota.',
+    )
+    parser.add_argument('--highfreq-low-quota', type=int, default=3)
+    parser.add_argument('--highfreq-mid-quota', type=int, default=4)
+    parser.add_argument('--highfreq-high-quota', type=int, default=8)
+    parser.add_argument(
+        '--highfreq-f-ref-khz',
+        type=float,
+        default=50.0,
+        help='Reference frequency for the high-frequency resolution weight.',
+    )
+    parser.add_argument('--highfreq-resolution-gamma', type=float, default=0.5)
+    parser.add_argument('--highfreq-resolution-min', type=float, default=0.70)
+    parser.add_argument('--highfreq-resolution-max', type=float, default=1.60)
+    parser.add_argument('--highfreq-phase-weight', type=float, default=0.35)
+    parser.add_argument('--highfreq-participation-target', type=float, default=0.35)
+    parser.add_argument('--highfreq-participation-sigma', type=float, default=0.25)
     parser.add_argument(
         '--min-healthy-abs-percentile',
         type=float,
@@ -494,6 +534,320 @@ def robust_contrast(values: np.ndarray) -> float:
     q50 = float(np.nanquantile(array, 0.50))
     q90 = float(np.nanquantile(array, 0.90))
     return float(np.clip((q90 - q50) / (q90 + q50 + EPS), 0.0, 1.0))
+
+
+def normalized_positive_map(values: np.ndarray) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    array = np.where(np.isfinite(array), array, 0.0)
+    array = array - float(np.nanmin(array))
+    max_value = float(np.nanmax(array)) if array.size else 0.0
+    if max_value <= 0.0:
+        return np.zeros_like(array, dtype=np.float64)
+    return array / max_value
+
+
+def map_focus_metrics(image: np.ndarray) -> dict[str, float]:
+    values = normalized_positive_map(image).reshape(-1)
+    values = values[np.isfinite(values)]
+    if values.size == 0 or float(np.sum(values)) <= 0.0:
+        return {
+            'focus_top5_over_top20': 0.0,
+            'focus_peak_to_median': 0.0,
+            'focus_gini': 0.0,
+            'focus_entropy_score': 0.0,
+            'focus_score': 0.0,
+        }
+    sorted_values = np.sort(values)[::-1]
+    top5_count = max(1, int(math.ceil(0.05 * sorted_values.size)))
+    top20_count = max(top5_count, int(math.ceil(0.20 * sorted_values.size)))
+    top5_sum = float(np.sum(sorted_values[:top5_count]))
+    top20_sum = float(np.sum(sorted_values[:top20_count]))
+    top_ratio = float(np.clip(top5_sum / (top20_sum + EPS), 0.0, 1.0))
+    median = float(np.nanmedian(values))
+    peak = float(np.nanmax(values))
+    peak_to_median = float(np.clip((peak - median) / (peak + median + EPS), 0.0, 1.0))
+    ascending = np.sort(values)
+    n = ascending.size
+    gini = float(
+        np.clip(
+            (2.0 * np.sum((np.arange(n, dtype=np.float64) + 1.0) * ascending) / (n * np.sum(ascending) + EPS))
+            - (n + 1.0) / n,
+            0.0,
+            1.0,
+        )
+    )
+    prob = values / (float(np.sum(values)) + EPS)
+    entropy = -float(np.sum(prob * np.log(prob + EPS))) / math.log(float(values.size))
+    entropy_score = float(np.clip(1.0 - entropy, 0.0, 1.0))
+    focus_score = float(
+        np.clip(
+            0.35 * top_ratio + 0.25 * peak_to_median + 0.25 * gini + 0.15 * entropy_score,
+            0.0,
+            1.0,
+        )
+    )
+    return {
+        'focus_top5_over_top20': top_ratio,
+        'focus_peak_to_median': peak_to_median,
+        'focus_gini': gini,
+        'focus_entropy_score': entropy_score,
+        'focus_score': focus_score,
+    }
+
+
+def participation_preference(participation: float, target: float, sigma: float) -> float:
+    sigma = max(float(sigma), EPS)
+    return float(math.exp(-((float(participation) - float(target)) / sigma) ** 2))
+
+
+def build_highfreq_focus_context(
+    healthy: dict[str, Any],
+    *,
+    metadata_dir: Path,
+    grid_size: int,
+    sigma_ray_mm: float,
+) -> dict[str, Any]:
+    if cm is None:
+        raise RuntimeError('coarse_map_common.py is required for --metric physics_highfreq_quota')
+    metadata_path = metadata_dir / 'dataset_a_frequency_healthy.json'
+    metadata = cm.read_json(metadata_path) if metadata_path.exists() else {}
+    geometry = cm.geometry_from_metadata(metadata)
+    config = cm.CoarseMapConfig(
+        theta_count=grid_size,
+        z_count=grid_size,
+        sigma_ray_mm=sigma_ray_mm,
+    )
+    theta_deg, z_mm = cm.label_grid(geometry, theta_count=config.theta_count, z_count=config.z_count)
+    kernels: list[np.ndarray] = []
+    tx_indices: list[int] = []
+    rx_indices: list[int] = []
+    tx_lookup = {value: index for index, value in enumerate(healthy['tx_indices'])}
+    rx_lookup = {value: index for index, value in enumerate(healthy['rx_indices'])}
+    for tx_id in healthy['tx_indices']:
+        tx = geometry.tx_positions[tx_id]
+        for rx_id in healthy['rx_indices']:
+            rx = geometry.rx_positions[rx_id]
+            for order in config.helical_orders:
+                kernel, _tube, _ray_length = cm.ray_kernel(theta_deg, z_mm, geometry, tx, rx, order, config)
+                kernel = np.asarray(kernel, dtype=np.float64)
+                norm = float(np.sum(kernel))
+                if norm <= 0.0 or not np.isfinite(norm):
+                    continue
+                kernels.append((kernel / norm).astype(np.float32))
+                tx_indices.append(tx_lookup[tx_id])
+                rx_indices.append(rx_lookup[rx_id])
+    if not kernels:
+        raise RuntimeError('No ray kernels were built for physics_highfreq_quota.')
+    return {
+        'kernels': np.stack(kernels, axis=0).astype(np.float32),
+        'tx_case_indices': np.asarray(tx_indices, dtype=np.int64),
+        'rx_case_indices': np.asarray(rx_indices, dtype=np.int64),
+        'grid_size': int(grid_size),
+        'sigma_ray_mm': float(sigma_ray_mm),
+    }
+
+
+def physics_highfreq_quota_rank_frequencies(
+    healthy: dict[str, Any],
+    damaged_items: list[dict[str, Any]],
+    *,
+    min_healthy_abs_percentile: float,
+    frequency_min_khz: float | None,
+    frequency_max_khz: float | None,
+    metadata_dir: Path,
+    grid_size: int,
+    sigma_ray_mm: float,
+    low_max_khz: float,
+    mid_max_khz: float,
+    f_ref_khz: float,
+    resolution_gamma: float,
+    resolution_min: float,
+    resolution_max: float,
+    phase_weight: float,
+    participation_target: float,
+    participation_sigma: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    h0 = np.asarray(healthy['H'], dtype=np.complex128)
+    damaged_stack = np.stack([np.asarray(item['H'], dtype=np.complex128) for item in damaged_items], axis=0)
+    healthy_completed = np.asarray(healthy['completed_mask'], dtype=bool)[None, :, None, :]
+    damaged_completed = np.stack([np.asarray(item['completed_mask'], dtype=bool) for item in damaged_items], axis=0)
+    damaged_completed = damaged_completed[:, :, None, :]
+    finite = np.isfinite(np.real(damaged_stack)) & np.isfinite(np.imag(damaged_stack))
+    finite &= np.isfinite(np.real(h0))[None, :, :, :] & np.isfinite(np.imag(h0))[None, :, :, :]
+    valid_stack = finite & healthy_completed & damaged_completed
+    context = build_highfreq_focus_context(
+        healthy,
+        metadata_dir=metadata_dir,
+        grid_size=grid_size,
+        sigma_ray_mm=sigma_ray_mm,
+    )
+    kernels = np.asarray(context['kernels'], dtype=np.float64)
+    tx_indices = np.asarray(context['tx_case_indices'], dtype=np.int64)
+    rx_indices = np.asarray(context['rx_case_indices'], dtype=np.int64)
+    frequencies_hz = healthy['frequencies_hz']
+    healthy_mean_abs = np.nanmean(np.abs(h0), axis=(0, 1))
+    floor = float(np.nanpercentile(healthy_mean_abs, min_healthy_abs_percentile))
+    rows: list[dict[str, Any]] = []
+    for freq_index, frequency_hz in enumerate(frequencies_hz):
+        frequency_khz = frequency_hz / 1000.0
+        if frequency_min_khz is not None and frequency_khz < frequency_min_khz:
+            continue
+        if frequency_max_khz is not None and frequency_khz > frequency_max_khz:
+            continue
+        if frequency_khz <= low_max_khz:
+            band = 'low'
+        elif frequency_khz <= mid_max_khz:
+            band = 'mid'
+        else:
+            band = 'high'
+        common = {
+            'frequency_hz': frequency_hz,
+            'frequency_khz': frequency_khz,
+            'frequency_band': band,
+            'healthy_mean_abs': float(healthy_mean_abs[freq_index]),
+        }
+        if healthy_mean_abs[freq_index] < floor:
+            rows.append({
+                **common,
+                'sensitivity_mean': float('nan'),
+                'sensitivity_median': float('nan'),
+                'sensitivity_min': float('nan'),
+                'sensitivity_max': float('nan'),
+                'sample_count': 0,
+                'valid_tx_count_min': 0,
+                'valid_ray_count_min': '',
+                'excluded_reason': 'healthy_response_below_floor',
+            })
+            continue
+        h0_f = h0[None, :, :, freq_index]
+        hd_f = damaged_stack[:, :, :, freq_index]
+        valid_f = valid_stack[:, :, :, freq_index]
+        ratio = hd_f / (h0_f + EPS)
+        log_amp_abs = np.abs(np.log(np.abs(ratio) + EPS))
+        phase_abs = np.abs(np.sin(np.angle(ratio)))
+        signal = log_amp_abs + float(phase_weight) * phase_abs
+        signal = np.where(valid_f, signal, np.nan)
+        path_signal = np.nanmean(signal[:, tx_indices, rx_indices], axis=0)
+        finite_path = np.isfinite(path_signal)
+        if not np.any(finite_path):
+            rows.append({
+                **common,
+                'sensitivity_mean': float('nan'),
+                'sensitivity_median': float('nan'),
+                'sensitivity_min': float('nan'),
+                'sensitivity_max': float('nan'),
+                'sample_count': 0,
+                'valid_tx_count_min': 0,
+                'valid_ray_count_min': '',
+                'excluded_reason': 'no_valid_cases',
+            })
+            continue
+        path_signal = np.where(finite_path, np.maximum(path_signal, 0.0), 0.0)
+        valid_values = path_signal[finite_path]
+        visibility = float(0.70 * np.nanmedian(valid_values) + 0.30 * np.nanquantile(valid_values, 0.75))
+        contrast = robust_contrast(valid_values)
+        participation = participation_ratio(path_signal)
+        coverage_pref = participation_preference(participation, participation_target, participation_sigma)
+        image = np.tensordot(path_signal, kernels, axes=(0, 0))
+        focus = map_focus_metrics(image)
+        f_ref = max(float(f_ref_khz), EPS)
+        resolution_weight = float(np.clip((frequency_khz / f_ref) ** float(resolution_gamma), resolution_min, resolution_max))
+        health_weight = float(
+            np.clip(
+                healthy_mean_abs[freq_index] / (float(np.nanmedian(healthy_mean_abs)) + EPS),
+                0.5,
+                1.5,
+            )
+        )
+        score = visibility
+        score *= 0.45 + 0.55 * focus['focus_score']
+        score *= 0.70 + 0.30 * contrast
+        score *= 0.65 + 0.35 * coverage_pref
+        score *= resolution_weight
+        score *= health_weight
+        valid_case_counts = np.sum(np.any(valid_f, axis=2), axis=1)
+        rows.append({
+            **common,
+            'sensitivity_mean': float(score),
+            'sensitivity_median': float(score),
+            'sensitivity_min': float(np.nanmin(valid_values)),
+            'sensitivity_max': float(np.nanmax(valid_values)),
+            'sample_count': int(np.sum(valid_case_counts > 0)),
+            'valid_tx_count_min': int(np.min(valid_case_counts)) if valid_case_counts.size else 0,
+            'valid_ray_count_min': int(np.sum(finite_path)),
+            'highfreq_visibility': visibility,
+            'highfreq_path_contrast': contrast,
+            'highfreq_participation': participation,
+            'highfreq_coverage_preference': coverage_pref,
+            'highfreq_resolution_weight': resolution_weight,
+            'highfreq_health_weight': health_weight,
+            'highfreq_focus_score': focus['focus_score'],
+            'highfreq_focus_top5_over_top20': focus['focus_top5_over_top20'],
+            'highfreq_focus_peak_to_median': focus['focus_peak_to_median'],
+            'highfreq_focus_gini': focus['focus_gini'],
+            'highfreq_focus_entropy_score': focus['focus_entropy_score'],
+            'excluded_reason': '',
+        })
+    rows.sort(key=lambda row: (-np.nan_to_num(row['sensitivity_mean'], nan=-np.inf), row['frequency_hz']))
+    metadata = {
+        'score_model': 'rytov_visibility_v1_focus_highfreq_quota',
+        'highfreq_grid_size': int(grid_size),
+        'highfreq_sigma_ray_mm': float(sigma_ray_mm),
+        'highfreq_low_max_khz': float(low_max_khz),
+        'highfreq_mid_max_khz': float(mid_max_khz),
+        'highfreq_f_ref_khz': float(f_ref_khz),
+        'highfreq_resolution_gamma': float(resolution_gamma),
+        'highfreq_resolution_min': float(resolution_min),
+        'highfreq_resolution_max': float(resolution_max),
+        'highfreq_phase_weight': float(phase_weight),
+        'highfreq_participation_target': float(participation_target),
+        'highfreq_participation_sigma': float(participation_sigma),
+        'highfreq_ray_count': int(kernels.shape[0]),
+    }
+    return rows, metadata
+
+
+def select_with_frequency_quotas(
+    ranked_rows: list[dict[str, Any]],
+    *,
+    top_n: int,
+    low_quota: int,
+    mid_quota: int,
+    high_quota: int,
+) -> list[dict[str, Any]]:
+    quotas = {'low': max(0, int(low_quota)), 'mid': max(0, int(mid_quota)), 'high': max(0, int(high_quota))}
+    selected: list[dict[str, Any]] = []
+    used: set[float] = set()
+    valid_rows = [
+        row for row in ranked_rows
+        if not row.get('excluded_reason') and np.isfinite(row.get('sensitivity_mean', float('nan')))
+    ]
+    for band in ('low', 'mid', 'high'):
+        band_rows = [row for row in valid_rows if row.get('frequency_band') == band]
+        for row in band_rows[:quotas[band]]:
+            if len(selected) >= top_n:
+                break
+            selected_row = dict(row)
+            selected_row['quota_band'] = band
+            selected_row['quota_selected'] = True
+            selected_row['quota_rank'] = len(selected) + 1
+            selected.append(selected_row)
+            used.add(float(row['frequency_hz']))
+    if len(selected) < top_n:
+        for row in valid_rows:
+            frequency = float(row['frequency_hz'])
+            if frequency in used:
+                continue
+            selected_row = dict(row)
+            selected_row['quota_band'] = row.get('frequency_band', '')
+            selected_row['quota_selected'] = False
+            selected_row['quota_rank'] = len(selected) + 1
+            selected.append(selected_row)
+            used.add(frequency)
+            if len(selected) >= top_n:
+                break
+    selected.sort(key=lambda row: int(row.get('quota_rank', 0)))
+    return selected
 
 
 def build_ray_born_context(
@@ -1120,6 +1474,34 @@ def main() -> None:
                 row for row in ranked
                 if not row['excluded_reason'] and np.isfinite(row['sensitivity_mean'])
             ][:args.top_n]
+    elif args.metric == 'physics_highfreq_quota':
+        ranked, physics_metadata = physics_highfreq_quota_rank_frequencies(
+            healthy,
+            damaged_items,
+            min_healthy_abs_percentile=args.min_healthy_abs_percentile,
+            frequency_min_khz=args.frequency_min_khz,
+            frequency_max_khz=args.frequency_max_khz,
+            metadata_dir=args.metadata_dir,
+            grid_size=args.highfreq_grid_size,
+            sigma_ray_mm=args.highfreq_sigma_ray_mm,
+            low_max_khz=args.highfreq_low_max_khz,
+            mid_max_khz=args.highfreq_mid_max_khz,
+            f_ref_khz=args.highfreq_f_ref_khz,
+            resolution_gamma=args.highfreq_resolution_gamma,
+            resolution_min=args.highfreq_resolution_min,
+            resolution_max=args.highfreq_resolution_max,
+            phase_weight=args.highfreq_phase_weight,
+            participation_target=args.highfreq_participation_target,
+            participation_sigma=args.highfreq_participation_sigma,
+        )
+        selected = select_with_frequency_quotas(
+            ranked,
+            top_n=args.top_n,
+            low_quota=args.highfreq_low_quota,
+            mid_quota=args.highfreq_mid_quota,
+            high_quota=args.highfreq_high_quota,
+        )
+        selection_strategy_used = 'band_quota_top_score'
     else:
         ranked = rank_frequencies(
             healthy,
@@ -1165,6 +1547,13 @@ def main() -> None:
         'jobs': args.jobs,
         'selection_strategy': selection_strategy_used,
         'physics_metadata': physics_metadata,
+        'highfreq_quota': {
+            'low_quota': args.highfreq_low_quota,
+            'mid_quota': args.highfreq_mid_quota,
+            'high_quota': args.highfreq_high_quota,
+            'low_max_khz': args.highfreq_low_max_khz,
+            'mid_max_khz': args.highfreq_mid_max_khz,
+        },
         'selected_frequencies_hz': [row['frequency_hz'] for row in selected],
         'selected_frequencies_khz': [row['frequency_khz'] for row in selected],
         'ranked_csv': str(ranked_csv),

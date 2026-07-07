@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -19,7 +19,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent
 SIMPLE_ROOT = ROOT.parent
 DEFAULT_FREQUENCY_DATASET_ROOT = (
-    SIMPLE_ROOT / "f_domain" / "output" / "streaming_dataset_a_frequency_shell"
+    SIMPLE_ROOT / "f_domain" / "output_dataset" / "streaming_dataset_a_frequency_shell"
 )
 DEFAULT_RESPONSE_DIR = DEFAULT_FREQUENCY_DATASET_ROOT / "frequency_response"
 DEFAULT_METADATA_DIR = DEFAULT_FREQUENCY_DATASET_ROOT / "metadata"
@@ -27,23 +27,25 @@ DEFAULT_LABEL_DIR = DEFAULT_FREQUENCY_DATASET_ROOT / "labels"
 DEFAULT_HEALTHY_ID = "dataset_a_frequency_healthy"
 DEFAULT_HEALTHY_RESPONSE = DEFAULT_RESPONSE_DIR / f"{DEFAULT_HEALTHY_ID}_H_complex.npz"
 DEFAULT_HEALTHY_METADATA = DEFAULT_METADATA_DIR / f"{DEFAULT_HEALTHY_ID}.json"
-DEFAULT_OUTPUT_ROOT = ROOT / "output"
+DEFAULT_OUTPUT_ROOT = ROOT / "output_dataset"
 DEFAULT_SELECTION_TXT = (
     SIMPLE_ROOT
     / "f_domain"
-    / "output"
+    / "output_dataset"
     / "frequency_selection"
     / "frequency_sensitivity_top15_frequencies.txt"
 )
 
 
 EPS = 1e-30
+DEFAULT_THETA_COUNT = 256
+DEFAULT_Z_COUNT = 256
 
 
 @dataclass(frozen=True)
 class CoarseMapConfig:
-    theta_count: int = 512
-    z_count: int = 512
+    theta_count: int = DEFAULT_THETA_COUNT
+    z_count: int = DEFAULT_Z_COUNT
     helical_orders: tuple[int, ...] = (-1, 0, 1)
     sigma_ray_mm: float = 25.0
     min_endpoint_distance_mm: float = 30.0
@@ -79,6 +81,45 @@ class CoarseMapConfig:
             if isinstance(value, tuple):
                 data[key] = list(value)
         return data
+
+
+def apply_grid_overrides(
+    config: CoarseMapConfig,
+    *,
+    grid_size: int | None = None,
+    theta_count: int | None = None,
+    z_count: int | None = None,
+) -> CoarseMapConfig:
+    values: dict[str, int] = {}
+    if grid_size is not None:
+        if grid_size <= 0:
+            raise ValueError("--grid-size must be positive")
+        values["theta_count"] = grid_size
+        values["z_count"] = grid_size
+    if theta_count is not None:
+        if theta_count <= 0:
+            raise ValueError("--theta-count must be positive")
+        values["theta_count"] = theta_count
+    if z_count is not None:
+        if z_count <= 0:
+            raise ValueError("--z-count must be positive")
+        values["z_count"] = z_count
+    if not values:
+        return config
+    return replace(config, **values)
+
+
+def coarse_map_matches_config(path: Path, config: CoarseMapConfig) -> bool:
+    if not path.exists():
+        return False
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            if "pic" not in data.files:
+                return False
+            pic = data["pic"]
+            return tuple(pic.shape[1:]) == (config.z_count, config.theta_count)
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -648,7 +689,7 @@ def make_v1_coarse_map(
         "valid_tx_rx_frequency_count": valid_count,
         "selected_frequencies_hz": [
             float(f)
-            for f, selected in zip(healthy.frequencies_hz, selected_mask, strict=True)
+            for f, selected in zip(healthy.frequencies_hz, selected_mask)
             if selected
         ],
         "used_frequencies_hz": [

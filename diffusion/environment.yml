@@ -1,0 +1,52 @@
+name: diffusion
+
+channels:
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch
+  - nvidia
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
+  - nodefaults
+
+dependencies:
+  - python=3.11
+
+  - pytorch=2.5.1
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.4
+
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - scikit-image
+  - matplotlib
+  - seaborn
+  - plotly
+  - pillow
+  - imageio
+  - tifffile
+  - opencv
+  - h5py
+  - pyyaml
+  - tqdm
+
+  - ipykernel
+  - jupyterlab
+  - tensorboard
+
+  - pip
+  - pip:
+      - -i https://pypi.tuna.tsinghua.edu.cn/simple
+      - diffusers
+      - transformers
+      - accelerate
+      - safetensors
+      - huggingface_hub
+      - einops
+      - timm
+      - torchmetrics
+      - pytorch-msssim
+      - ema-pytorch
+      - kornia
+      - lpips
+      - kaleido

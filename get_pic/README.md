@@ -9,7 +9,7 @@ conda run -n get_pic python simple/get_pic/generate_coarse_maps.py
 默认输入根目录是：
 
 ```text
-simple/f_domain/output/streaming_dataset_a_frequency_shell/
+simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/
 ```
 
 默认期望的输入文件包括：
@@ -27,12 +27,36 @@ metadata/dataset_a_frequency_sample_0001.json
 conda run -n get_pic python simple/get_pic/generate_coarse_maps.py --sample-ids 1-20
 ```
 
+默认粗图尺寸为 `256 x 256`，也就是：
+
+```text
+pic.shape = (channel, 256, 256)
+```
+
+尺寸默认值写在：
+
+```text
+simple/get_pic/configs/dataset_a_v1.json
+```
+
+需要临时改尺寸时，不必修改源码，直接加参数：
+
+```powershell
+conda run -n get_pic python simple/get_pic/generate_coarse_maps.py --sample-ids 1-20 --grid-size 512
+```
+
+也可以分别控制周向和轴向采样：
+
+```powershell
+conda run -n get_pic python simple/get_pic/generate_coarse_maps.py --theta-count 256 --z-count 256
+```
+
 输出目录：
 
 ```text
-simple/get_pic/output/coarse_maps/
-simple/get_pic/output/x_matrix/
-simple/get_pic/output/manifest.csv
+simple/get_pic/output_dataset/coarse_maps/
+simple/get_pic/output_dataset/x_matrix/
+simple/get_pic/output_dataset/manifest.csv
 ```
 
 可选的预览和评价命令：
@@ -62,13 +86,13 @@ simple/get_pic/output/coarse_maps/<sample>_coarse_maps.npz
 因此源缺陷标签：
 
 ```text
-simple/f_domain/output/streaming_dataset_a_frequency_shell/labels/<sample>_defect_depth_norm.npy
+simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/labels/<sample>_defect_depth_norm.npy
 ```
 
 或对应的预览图：
 
 ```text
-simple/f_domain/output/streaming_dataset_a_frequency_shell/labels/<sample>_defect_label.png
+simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/labels/<sample>_defect_label.png
 ```
 
 可以按同样方向直接对照：横向是周向角度，纵向是管道轴向位置。
@@ -99,7 +123,7 @@ conda run -n get_pic python simple/get_pic/preview_coarse_maps.py --raw --coarse
 先打开频域流程生成的 label 预览图：
 
 ```text
-simple/f_domain/output/streaming_dataset_a_frequency_shell/labels/<sample>_defect_label.png
+simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/labels/<sample>_defect_label.png
 ```
 
 然后和 `get_pic` 的 preview PNG 对照。
@@ -149,7 +173,7 @@ simple/get_pic/output/reports/<sample>_coarse_maps_metrics.json
 更适合作为论文主方法的是无 label 的物理选频指标 `physics_tomography`：
 
 ```powershell
-conda run -n get_pic python simple/f_domain/select_sensitive_frequencies.py --sample-ids 1-12,14-23 --metric physics_tomography --top-n 15 --output-root simple/f_domain/output/frequency_selection_physics_tomography_tuned --prefix physics_tomography_tuned --frequency-min-khz 20 --frequency-max-khz 100
+conda run -n get_pic python simple/f_domain/select_sensitive_frequencies.py --sample-ids 1-12,14-23 --metric physics_tomography --top-n 15 --output-root simple/f_domain/output_dataset/frequency_selection_physics_tomography_tuned --prefix physics_tomography_tuned --frequency-min-khz 20 --frequency-max-khz 100
 ```
 
 该指标不读取缺陷 label，只使用健康/损伤复频响。它综合考虑稳健相对扰动、相位扰动、路径参与度、路径对比度、tx/rx 覆盖均衡性。物理解释见：
@@ -161,7 +185,7 @@ simple/get_pic/PHYSICS_FREQUENCY_SELECTION.md
 `v1_label_guided` 依赖缺陷 label，因此更适合作为仿真阶段的后验验证和调参工具，不建议作为论文主选频依据：
 
 ```powershell
-conda run -n get_pic python simple/f_domain/select_sensitive_frequencies.py --sample-ids 1-12,14-23 --metric v1_label_guided --top-n 15 --output-root simple/f_domain/output/frequency_selection_v1_label_guided --prefix v1_label_guided --v1-grid-size 128 --v1-sigma-ray-mm 25 --frequency-min-khz 20 --frequency-max-khz 100
+conda run -n get_pic python simple/f_domain/select_sensitive_frequencies.py --sample-ids 1-12,14-23 --metric v1_label_guided --top-n 15 --output-root simple/f_domain/output_dataset/frequency_selection_v1_label_guided --prefix v1_label_guided --v1-grid-size 128 --v1-sigma-ray-mm 25 --frequency-min-khz 20 --frequency-max-khz 100
 ```
 
 该指标的思想是：对每个频点，检查异常路径强度是否更集中在穿过真实 label 的路径上。它综合了路径异常与 label 路径重叠的相关性、top label 路径和非 label 路径的对比度，以及异常能量落在 label 路径上的比例。
@@ -169,13 +193,13 @@ conda run -n get_pic python simple/f_domain/select_sensitive_frequencies.py --sa
 对比某个样本的新选频和全部频点：
 
 ```powershell
-conda run -n get_pic python simple/get_pic/compare_frequency_selection.py --sample-id 14 --selected-frequencies simple/f_domain/output/frequency_selection_v1_label_guided/v1_label_guided_top15_frequencies.txt --output-root simple/get_pic/output/frequency_selection_compare_sample14 --preview
+conda run -n get_pic python simple/get_pic/compare_frequency_selection.py --sample-id 14 --selected-frequencies simple/f_domain/output_dataset/frequency_selection_v1_label_guided/v1_label_guided_top15_frequencies.txt --output-root simple/get_pic/output_dataset/frequency_selection_compare_sample14 --preview
 ```
 
 如果要对比旧 `relative_l2` 选频：
 
 ```powershell
-conda run -n get_pic python simple/get_pic/compare_frequency_selection.py --sample-id 14 --selected-frequencies simple/f_domain/output/frequency_selection/frequency_sensitivity_top15_frequencies.txt --output-root simple/get_pic/output/frequency_selection_compare_sample14_old_relative_l2 --preview
+conda run -n get_pic python simple/get_pic/compare_frequency_selection.py --sample-id 14 --selected-frequencies simple/f_domain/output_dataset/frequency_selection/frequency_sensitivity_top15_frequencies.txt --output-root simple/get_pic/output_dataset/frequency_selection_compare_sample14_old_relative_l2 --preview
 ```
 
 汇总评价报告：
@@ -187,5 +211,5 @@ conda run -n get_pic python simple/get_pic/summarize_reports.py --report simple/
 如果要检查 `physics_tomography` 与全频点的差异：
 
 ```powershell
-conda run -n get_pic python simple/get_pic/compare_frequency_selection.py --sample-id 14 --selected-frequencies simple/f_domain/output/frequency_selection_physics_tomography_tuned/physics_tomography_tuned_top15_frequencies.txt --output-root simple/get_pic/output/frequency_selection_compare_sample14_physics_tomography_tuned --preview
+conda run -n get_pic python simple/get_pic/compare_frequency_selection.py --sample-id 14 --selected-frequencies simple/f_domain/output_dataset/frequency_selection_physics_tomography_tuned/physics_tomography_tuned_top15_frequencies.txt --output-root simple/get_pic/output_dataset/frequency_selection_compare_sample14_physics_tomography_tuned --preview
 ```

@@ -8,7 +8,7 @@
 - 缺陷：同一个壳厚度局部减薄模型；随机样本默认是 1-3 个平滑外表面腐蚀缺陷，采用小/中/大尺寸混合，多缺陷时优先大+中/小组合，少量浅 lobe，局部累计最大厚度损失限制为 5 mm。
 - Dataset A 低反射边界：同一个两端轴向渐变 Rayleigh damping absorbing layer。
 - 发射端：同一个 PZT window 等效面载荷。
-- 接收端：同一个 `intop_shell(w_rx*u_r)/intop_shell(w_rx)` 小面积加权平均。
+- 接收端：同一个 `intop_shell(w_rx*w)/intop_shell(w_rx)` 小面积加权平均。
 - 求解：频域 `Frequency` study，频率由全局参数 `pzt_fc` 控制。
 
 频域载荷不再包含 `pztpulse(t)`。它是单位谐波幅值：
@@ -26,7 +26,8 @@ F(tx, f, theta, z) = F0/pzt_A * window_tx(theta, z)
 - `solve_export_dataset_a_frequency.py`: 流式频域求解与导出脚本。
 - `select_sensitive_frequencies.py`: 根据健康/缺陷频响计算频点 sensitivity 并推荐频点。
 - `FREQUENCY_DOMAIN_DIFFUSION_PLAN.md`: 频域粗图、时域校准和 diffusion 训练规划。
-- `output/`: 频域脚本默认输出目录。
+- `output_dataset/`: 频域脚本当前默认输出目录。这里保存 `physics_highfreq_quota` top15 训练数据，默认 healthy 已经是 top15 频率轴。
+- `output2/`: 历史 full sweep/pilot 输出目录，可作为重新选频或迁移的来源，不再作为默认续算目录。
 
 ## 构建可检查模型
 
@@ -37,16 +38,16 @@ conda run --no-capture-output -n comsol python -u simple/f_domain/build_dataset_
 输出：
 
 ```text
-simple/f_domain/output/dataset_a_frequency_shell/pipe_shell_frequency_healthy.mph
-simple/f_domain/output/dataset_a_frequency_shell/metadata/pipe_shell_frequency_healthy.json
-simple/f_domain/output/dataset_a_frequency_shell/dataset_a_frequency_shell_build_log.md
+simple/f_domain/output_dataset/dataset_a_frequency_shell/pipe_shell_frequency_healthy.mph
+simple/f_domain/output_dataset/dataset_a_frequency_shell/metadata/pipe_shell_frequency_healthy.json
+simple/f_domain/output_dataset/dataset_a_frequency_shell/dataset_a_frequency_shell_build_log.md
 ```
 
 在 COMSOL Model Builder 中重点检查：
 
 - `Study > simple shell displacement frequency domain`
 - `Component 1 > Shell Mechanics > equivalent transducer face load`
-- `Results > Derived Values > receiver patch weighted average radial displacement`
+- `Results > Derived Values > receiver patch weighted average axial displacement`
 - `Global Definitions > Parameters > tx`
 - `Global Definitions > Parameters > pzt_fc`
 
@@ -142,12 +143,217 @@ conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_d
 
 和时域流式脚本一致，默认每个样本复用一个 COMSOL 模型/网格，逐工况修改 `tx` 和 `pzt_fc`，求解后立即导出并 `clearSolutionData()`。如果遇到 COMSOL 重复求解相关问题，可加 `--rebuild-each-case` 回退到每工况重建模型。
 
+### 使用 physics_highfreq_quota 选频后批量仿真
+
+服务器上建议分两阶段做数据：
+
+1. 先用少量 pilot 样本做完整频率扫描，例如 `20-100 kHz, step=2.5 kHz`。
+2. 用 `physics_highfreq_quota` 从 pilot 样本中选 top15 频点。
+3. 后续大规模训练样本只求解这 15 个频点，显著减少 COMSOL 工况数。
+
+pilot 全频扫描示例：
+
+```bash
+conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_dataset_a_frequency.py \
+  --include-healthy \
+  --samples 40 \
+  --start-id 1 \
+  --tx 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 \
+  --frequency-start-khz 20 \
+  --frequency-stop-khz 100 \
+  --frequency-step-khz 2.5 \
+  --linear-solver pardiso \
+  --cores 16 \
+  --skip-label-preview \
+  --heartbeat-s 120 \
+  --checkpoint-every-cases 33
+```
+
+用 pilot 样本计算 `physics_highfreq_quota` top15：
+
+```bash
+conda run --no-capture-output -n comsol python -u simple/f_domain/select_sensitive_frequencies.py \
+  --sample-ids 1-40 \
+  --metric physics_highfreq_quota \
+  --top-n 15 \
+  --output-root simple/f_domain/output_dataset/frequency_selection_physics_highfreq_quota_40samples \
+  --prefix physics_highfreq_quota \
+  --frequency-min-khz 20 \
+  --frequency-max-khz 100 \
+  --jobs 0 \
+  --highfreq-grid-size 96 \
+  --highfreq-low-quota 3 \
+  --highfreq-mid-quota 4 \
+  --highfreq-high-quota 8 \
+  --highfreq-low-max-khz 40 \
+  --highfreq-mid-max-khz 65
+```
+
+当前 40 个 pilot 样本得到的 top15 是：
+
+```text
+40000,32500,20000,42500,50000,47500,52500,70000,72500,67500,75000,80000,82500,77500,95000
+```
+
+如果 pilot 阶段已经在 `output2` 中完成 `20-100 kHz, step=2.5 kHz` 全频扫描，推荐把 full sweep 数据截断迁移到当前默认目录 `output_dataset`。该脚本会保持目录结构，复制 labels/metadata/progress/选频结果，并把所有 `*_H_complex.npz` 与累计 CSV 截断到 top15：
+
+```bash
+conda run --no-capture-output -n comsol python -u simple/f_domain/subset_frequency_dataset.py --overwrite
+```
+
+迁移后默认 healthy 路径是：
+
+```text
+simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_healthy_H_complex.npz
+```
+
+这个文件的频率轴已经是 top15，所以后续 top15 大规模仿真不需要再传 `--healthy-sample-id dataset_a_frequency_healthy_physics_top15`。`output2` 中的 full sweep healthy 会保留为历史来源，避免覆盖。
+
+大规模训练样本直接读取 top15 频点：
+
+```bash
+FREQS=$(tr -d '\r\n[:space:]' < simple/f_domain/output_dataset/frequency_selection_physics_highfreq_quota_40samples/physics_highfreq_quota_top15_frequencies.txt)
+
+conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_dataset_a_frequency.py \
+  --samples 200 \
+  --start-id 41 \
+  --tx 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 \
+  --frequencies "$FREQS" \
+  --linear-solver pardiso \
+  --cores 16 \
+  --skip-label-preview \
+  --heartbeat-s 120 \
+  --checkpoint-every-cases 15
+```
+
+如果不想依赖 shell 读文件，也可以直接写死频点：
+
+```bash
+conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_dataset_a_frequency.py \
+  --samples 200 \
+  --start-id 41 \
+  --tx 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 \
+  --frequencies 40000,32500,20000,42500,50000,47500,52500,70000,72500,67500,75000,80000,82500,77500,95000 \
+  --linear-solver pardiso \
+  --cores 16 \
+  --skip-label-preview \
+  --heartbeat-s 120 \
+  --checkpoint-every-cases 15
+```
+
+每个样本的工况数为：
+
+```text
+case_count = n_tx * n_frequency
+physics_top15: 16 * 15 = 240 cases/sample
+20-100 kHz step 2.5: 16 * 33 = 528 cases/sample
+```
+
+因此，选频后每个样本求解工况约降为 `45.5%`，对大批量训练数据是主要加速来源。
+
+### 多 worker / 多节点运行
+
+不要让多个服务器进程同时使用自动 `--start-id`，否则它们可能扫描到相同的空闲编号段。推荐两种做法。
+
+做法 A：每个 worker 使用独立输出目录，最后再汇总：
+
+```bash
+FREQS=$(tr -d '\r\n[:space:]' < simple/f_domain/output_dataset/frequency_selection_physics_highfreq_quota_40samples/physics_highfreq_quota_top15_frequencies.txt)
+
+conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_dataset_a_frequency.py \
+  --output-root simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell_worker0 \
+  --samples 250 \
+  --start-id 1 \
+  --tx 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 \
+  --frequencies "$FREQS" \
+  --linear-solver pardiso \
+  --cores 16 \
+  --skip-label-preview \
+  --heartbeat-s 120 \
+  --checkpoint-every-cases 15
+```
+
+做法 B：共用一个输出目录，但每个 worker 必须显式给出不重叠的 `--start-id`。这种方式样本文件不会冲突，但 `manifest.csv` 没有文件锁，多进程同时结束时可能出现 manifest 竞争；最终可用样本应以 `frequency_response/*.npz`、`metadata/*.json` 和 `labels/*.npy` 为准。
+
+```bash
+# worker 0: --start-id 1    --samples 250
+# worker 1: --start-id 251  --samples 250
+# worker 2: --start-id 501  --samples 250
+# worker 3: --start-id 751  --samples 250
+```
+
+### 流式求解速度和写盘开销
+
+当前脚本不是每个工况保存 MPH，也不是每个工况重启 COMSOL。默认流程是：
+
+```text
+每个样本 build 一次 COMSOL model/mesh/solver tree
+for each tx/frequency:
+  修改参数 tx 和 pzt_fc
+  model.solve()
+  从 COMSOL 内存导出接收端复数响应
+  更新内存中的 H(tx,rx,f)
+  默认重写累计 CSV 和 NPZ
+  默认 clearSolutionData() 清掉当前工况全场解
+样本结束写 metadata 和 manifest
+```
+
+其中真正耗时通常仍是 `model.solve()`。但在大规模数据生成时，两个额外开销会变得明显：
+
+- 每个工况重写 `<sample>_frequency_response.csv` 和 `<sample>_H_complex.npz`。
+- 每个工况调用 `clearSolutionData()`。
+
+已加入两个用于服务器批量运行的参数：
+
+```bash
+--checkpoint-every-cases N
+--checkpoint-final-only
+```
+
+默认 `--checkpoint-every-cases 1` 保持旧行为：每个工况都写累计 CSV/NPZ，单样本中断后可保留最多进度，但写盘最多。
+
+推荐训练集批量生成使用：
+
+```bash
+--checkpoint-every-cases 15
+```
+
+对 physics top15 来说，case 顺序是 `tx` 外层、frequency 内层，所以 `15` 约等于每完成一个 tx 写一次累计输出。这样每样本写盘次数从 `240` 次降到约 `16` 次，结果精度不变，只是单样本中断时最多损失最近一个 checkpoint 后的工况。
+
+最快但最不利于单样本断点恢复的是：
+
+```bash
+--checkpoint-final-only
+```
+
+它只在样本结束时写完整 CSV/NPZ。适合单样本耗时可接受、服务器稳定、外层调度能自动重跑失败样本的情况。
+
+`clearSolutionData()` 的作用是清掉当前工况的全场解，保留几何、网格和 solver tree，避免 240/528 个工况的全场解堆在 COMSOL 内存里。它不改变已经导出的 `H(tx,rx,f)` 数值，也不降低精度，但会有一点 COMSOL Java API 开销。
+
+如果要测试它是不是当前机器的瓶颈，可以只用 1-2 个样本做基准：
+
+```bash
+conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_dataset_a_frequency.py \
+  --samples 2 \
+  --start-id 9001 \
+  --tx 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 \
+  --frequencies 40000,32500,20000,42500,50000,47500,52500,70000,72500,67500,75000,80000,82500,77500,95000 \
+  --linear-solver pardiso \
+  --cores 16 \
+  --skip-label-preview \
+  --heartbeat-s 120 \
+  --checkpoint-every-cases 15 \
+  --keep-solution-data-between-cases
+```
+
+只有当这个基准明显更快，并且 COMSOL 内存没有持续增长或崩溃时，才考虑在正式批量任务中使用 `--keep-solution-data-between-cases`。更保守的默认建议是：保留每工况 `clearSolutionData()`，只减少 checkpoint 写盘频率。
+
 ## 输出
 
 默认输出目录：
 
 ```text
-simple/f_domain/output/streaming_dataset_a_frequency_shell/
+simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/
 ```
 
 主要文件：
@@ -164,7 +370,7 @@ simple/f_domain/output/streaming_dataset_a_frequency_shell/
 
 ```text
 sample_id,dataset,defect_state,tx,frequency_hz,rx_channel,rx_pzt,
-theta_deg,x_mm,y_mm,z_mm,real_ur_m,imag_ur_m,abs_ur_m,phase_rad
+theta_deg,x_mm,y_mm,z_mm,real_uz_m,imag_uz_m,abs_uz_m,phase_rad
 ```
 
 NPZ 字段：
@@ -196,7 +402,7 @@ PhaseDiff = angle(H_damaged * conj(H_healthy))
 先用同一组 `tx/frequency` 生成一个健康基准和若干缺陷样本。然后运行：
 
 ```powershell
-conda run --no-capture-output -n comsol python -u simple/f_domain/select_sensitive_frequencies.py --healthy simple/f_domain/output/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_healthy_H_complex.npz --damaged simple/f_domain/output/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_sample_0001_H_complex.npz simple/f_domain/output/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_sample_0002_H_complex.npz simple/f_domain/output/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_sample_0003_H_complex.npz --top-n 15
+conda run --no-capture-output -n comsol python -u simple/f_domain/select_sensitive_frequencies.py --healthy simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_healthy_H_complex.npz --damaged simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_sample_0001_H_complex.npz simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_sample_0002_H_complex.npz simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/frequency_response/dataset_a_frequency_sample_0003_H_complex.npz --top-n 15
 ```
 
 如果使用默认输出目录和标准样本名，可以直接按样本编号选择参与 sensitivity 计算的缺陷样本：
@@ -396,7 +602,7 @@ Score(f) =
 输出目录默认为：
 
 ```text
-simple/f_domain/output/frequency_selection/
+simple/f_domain/output_dataset/frequency_selection/
 ```
 
 主要文件：

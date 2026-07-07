@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,9 +53,8 @@ def cases(tx_indices: tuple[int, ...], frequencies_hz: tuple[float, ...]) -> lis
     return result
 
 
-def radial_expression(position: dict) -> str:
-    theta = math.radians(position['theta_deg'])
-    return f'({math.cos(theta):.12g})*u+({math.sin(theta):.12g})*v'
+def receiver_expression(position: dict) -> str:
+    return shell.receiver_displacement_expr(position)
 
 
 def ensure_cutpoint(model, solution_dataset: str, position: dict):
@@ -88,7 +86,8 @@ def evaluate_case(model, case: Case, datasets, expressions):
 
 def write_waveform(path: Path, time_s: np.ndarray, channels: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    header = ['time_s'] + [f'rx{i:02d}_ur_m' for i in range(1, channels.shape[1] + 1)]
+    suffix = shell.receiver_component_column_suffix()
+    header = ['time_s'] + [f'rx{i:02d}_{suffix}' for i in range(1, channels.shape[1] + 1)]
     with path.open('w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(header)
@@ -108,7 +107,7 @@ def main() -> None:
     try:
         positions = shell.receiver_positions()
         datasets = [ensure_cutpoint(model, args.dataset, position) for position in positions]
-        expressions = [radial_expression(position) for position in positions]
+        expressions = [receiver_expression(position) for position in positions]
         for case in cases(tx_indices, frequencies_hz):
             print(f'Exporting tx={case.tx:02d}, f={case.frequency_hz:.0f} Hz, outer={case.outer}')
             time_s, channels = evaluate_case(model, case, datasets, expressions)

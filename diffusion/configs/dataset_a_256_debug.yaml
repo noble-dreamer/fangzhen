@@ -1,0 +1,80 @@
+seed: 20260702
+deterministic: false
+run_dir: simple/diffusion/runs/dataset_a_256_debug
+
+data:
+  coarse_dir: simple/get_pic/output_dataset/coarse_maps
+  x_dir: simple/get_pic/output_dataset/x_matrix
+  label_dir: simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/labels
+  sample_ids: 1-40
+  image_size: 256
+  val_fraction: 0.1
+  use_raw_pic: false
+  x_normalization: robust_per_sample
+  pic_channels:
+    - ray_log_amp_loss
+    - ray_relative_delta
+    - ray_phase_change
+    - low_frequency_band_map
+    - mid_frequency_band_map
+    - high_frequency_band_map
+    - path_coverage
+    - reliability_mask
+  train:
+    augment_circular_roll: false
+    x_noise_std: 0.0
+
+loader:
+  batch_size: 2
+  val_batch_size: 2
+  num_workers: 0
+  pin_memory: true
+  drop_last: false
+
+model:
+  image_size: 256
+  target_channels: 1
+  x_channels: 7
+  frequency_count: 15
+  base_channels: 32
+  channel_mult: [1, 2, 4]
+  num_res_blocks: 1
+  attention_resolutions: [32]
+  cond_dim: 192
+  x_hidden_channels: 48
+  dropout: 0.05
+
+diffusion:
+  timesteps: 1000
+  beta_schedule: cosine
+  prediction_type: v_prediction
+
+train:
+  epochs: 10
+  lr: 0.0001
+  weight_decay: 0.0001
+  warmup_steps: 50
+  min_lr_ratio: 0.05
+  amp: true
+  amp_dtype: float16
+  grad_clip: 1.0
+  ema: true
+  ema_decay: 0.999
+  log_every_steps: 5
+  save_every_steps: 100
+  val_every_steps: 50
+
+loss:
+  lambda_l1: 1.0
+  lambda_ssim: 0.2
+  lambda_x0_l1: 0.05
+  lambda_tv: 0.0001
+  lambda_range: 0.01
+  lambda_coverage_l1: 0.0
+  lambda_phys_v1: 0.0
+  phys_start_step: 20000
+  phys_warmup_steps: 60000
+
+sample:
+  steps: 50
+  eta: 0.0

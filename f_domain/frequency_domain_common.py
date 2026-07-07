@@ -25,7 +25,7 @@ import simple_shell_common as shell
 import streaming_export_common as streaming
 
 
-OUTPUT_ROOT = ROOT / 'output'
+OUTPUT_ROOT = ROOT / 'output_dataset'
 DEFAULT_FREQUENCIES = '30000,35000,40000,45000,50000,55000,60000,65000,70000'
 DEFAULT_SWEEP_START_KHZ = 20.0
 DEFAULT_SWEEP_STOP_KHZ = 100.0
@@ -108,7 +108,8 @@ def configure_dataset_a_frequency(*, use_parametric_sweep: bool = False) -> None
         'No transducer position, amplitude, or material perturbation.',
         'PZT solids are replaced by equivalent shell face-load windows.',
         'Frequency-domain excitation uses harmonic load amplitude, not pztpulse(t).',
-        'Receivers are patch-weighted radial displacement averages using intop_shell.',
+        f'Equivalent actuation direction uses {shell.TRANSDUCER.drive_axis}: {shell.transducer_drive_axis_description()}.',
+        'Receivers are patch-weighted axial displacement averages using intop_shell.',
     ]
     enable_frequency_domain_mode()
 
@@ -159,16 +160,15 @@ def add_frequency_solver_arguments(parser) -> None:
 
 def harmonic_load_vector_expression() -> list[str]:
     """Equivalent shell face-load amplitude for frequency-domain harmonic solves."""
-    x_terms: list[str] = []
-    y_terms: list[str] = []
+    terms = [[], [], []]
     for item in shell.transmitter_positions():
-        theta = math.radians(item['theta_deg'])
         gate = f'if(tx=={item["index"]},1,0)'
         window = shell.patch_window_expr(item['theta_deg'], item['z_mm'])
         scale = f'{item["amplitude_scale"]:.9g}*{gate}*F0/pzt_A*({window})'
-        x_terms.append(f'({math.cos(theta):.12g})*({scale})')
-        y_terms.append(f'({math.sin(theta):.12g})*({scale})')
-    return ['+'.join(x_terms) or '0', '+'.join(y_terms) or '0', '0']
+        for component_index, term in enumerate(shell.transducer_load_vector_terms(item, scale)):
+            if term != '0':
+                terms[component_index].append(term)
+    return ['+'.join(component_terms) or '0' for component_terms in terms]
 
 
 def create_frequency_functions(model) -> None:
@@ -267,6 +267,7 @@ def response_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     positions = shell.receiver_positions()
+    real_name, imag_name, abs_name, phase_name = shell.receiver_complex_column_names()
     for rx_channel, (position, value) in enumerate(zip(positions, channels, strict=True), start=1):
         rows.append({
             'sample_id': sample_id,
@@ -280,10 +281,10 @@ def response_rows(
             'x_mm': position['x_mm'],
             'y_mm': position['y_mm'],
             'z_mm': position['z_mm'],
-            'real_ur_m': float(np.real(value)),
-            'imag_ur_m': float(np.imag(value)),
-            'abs_ur_m': float(abs(value)),
-            'phase_rad': float(np.angle(value)),
+            real_name: float(np.real(value)),
+            imag_name: float(np.imag(value)),
+            abs_name: float(abs(value)),
+            phase_name: float(np.angle(value)),
         })
     return rows
 
@@ -373,15 +374,16 @@ def write_frequency_build_log(path: Path, saved: list[Path], problems: dict[str,
 - Study type: `Frequency`, with frequency list expression `pzt_fc`.
 - Time pulse `pztpulse(t)` is not used in the face load.
 - The equivalent load is a harmonic shell face-load amplitude `F0/pzt_A * window_tx`.
+- Equivalent actuation direction: `{shell.TRANSDUCER.drive_axis}` = {shell.transducer_drive_axis_description()}.
 - Dataset A absorbing layers are enabled through the same axial Rayleigh damping ramp as the time-domain Dataset A model.
-- Receivers are the same patch-weighted averages: `intop_shell(w_rx*u_r)/intop_shell(w_rx)`.
+- Receivers are the same patch-weighted averages: `intop_shell(w_rx*w)/intop_shell(w_rx)`.
 
 ## COMSOL Model Builder checks
 
 - Equivalent excitation: `Component 1 > Shell Mechanics > equivalent transducer face load`.
 - Active transmitter/frequency: `Global Definitions > Parameters`, then `tx` and `pzt_fc`.
 - Frequency study: `Study > simple shell displacement frequency domain`.
-- Receiver weighted averages: `Results > Derived Values > receiver patch weighted average radial displacement`.
+- Receiver weighted averages: `Results > Derived Values > receiver patch weighted average axial displacement`.
 - Optional marker datasets: `Results > Datasets > transmitter PZT marker points` and `receiver PZT marker points`.
 
 ## COMSOL self-check
@@ -407,8 +409,11 @@ def model_metadata(
     metadata['frequency_domain'] = {
         'study': 'Frequency',
         'frequency_expression': 'pzt_fc',
-        'load_expression': 'F0/pzt_A * window_tx, harmonic amplitude; pztpulse(t) is not used',
-        'receiver_export': 'complex patch-weighted radial displacement',
+        'load_expression': (
+            'F0/pzt_A * window_tx, harmonic amplitude; '
+            f'drive_axis={shell.TRANSDUCER.drive_axis}; pztpulse(t) is not used'
+        ),
+        'receiver_export': 'complex patch-weighted axial displacement',
         'output_units': 'm complex amplitude',
     }
     return metadata
@@ -430,6 +435,8 @@ def solve_export_frequency_sample(
     reuse_sample_model: bool = True,
     write_label_preview: bool = True,
     keep_case_csv: bool = False,
+    checkpoint_every_cases: int = 1,
+    clear_solution_after_each_export: bool = True,
 ) -> FrequencySampleExportResult:
     response_dir = output_root / 'csv' / 'frequency_response'
     npz_dir = output_root / 'frequency_response'
@@ -450,6 +457,7 @@ def solve_export_frequency_sample(
     response_table_rows: list[dict[str, Any]] = []
     case_problems: list[dict[str, Any]] = []
     sample_started_s = time.monotonic()
+    checkpoint_every_cases = int(checkpoint_every_cases)
 
     def emit(case: FrequencyCase | None, status: str, case_index: int, message: str) -> None:
         event = streaming.progress_event(
@@ -524,7 +532,16 @@ def solve_export_frequency_sample(
             frequency_index = frequencies_hz.index(case.frequency_hz)
             h_matrix[tx_index, :, frequency_index] = channels
             completed_mask[tx_index, frequency_index] = True
-            checkpoint_outputs()
+            should_checkpoint = (
+                checkpoint_every_cases > 0
+                and (
+                    checkpoint_every_cases <= 1
+                    or case_index % checkpoint_every_cases == 0
+                    or case_index == len(cases)
+                )
+            )
+            if should_checkpoint:
+                checkpoint_outputs()
             cleared_solution_data = streaming.clear_solution_data(model) if clear_solution_after_export else []
             max_abs = float(np.nanmax(np.abs(channels))) if channels.size else float('nan')
             nonzero_channels = int(np.sum(np.abs(channels) > 0.0))
@@ -538,7 +555,7 @@ def solve_export_frequency_sample(
                 'solution_dataset': solution_dataset.tag(),
                 'nonzero_channels': nonzero_channels,
                 'channel_count': int(channels.size),
-                'max_abs_ur_m': max_abs,
+                'max_abs_uz_m': max_abs,
                 'saved_mph': False,
                 'reused_sample_model': reused_model,
                 'cleared_solution_data': cleared_solution_data,
@@ -548,10 +565,14 @@ def solve_export_frequency_sample(
                 'case_done',
                 case_index,
                 (
-                    f'wrote {cumulative_csv.name}'
+                    (
+                        f'wrote {cumulative_csv.name}'
+                        if should_checkpoint
+                        else 'updated in-memory response matrix'
+                    )
                     + (f' and {case_csv.name}' if keep_case_csv else '')
                     + f'; solve_elapsed={streaming.format_duration(solve_info["solve_elapsed_s"])}; '
-                    f'nonzero_channels={nonzero_channels}/{channels.size}; max_abs_ur_m={max_abs:.6e}'
+                    f'nonzero_channels={nonzero_channels}/{channels.size}; max_abs_uz_m={max_abs:.6e}'
                 ),
             )
         except Exception as error:
@@ -612,7 +633,7 @@ def solve_export_frequency_sample(
                         build_problems=build_problems if case_index == 1 else [],
                         reused_model=True,
                         start_message='setting tx/frequency and solving reusable frequency-domain COMSOL model',
-                        clear_solution_after_export=True,
+                        clear_solution_after_export=clear_solution_after_each_export,
                     )
             finally:
                 if model is not None:
@@ -679,8 +700,9 @@ def solve_export_frequency_sample(
             'frequencies_hz': [case.frequency_hz for case in cases],
             'clear_each_case': clear_each_case,
             'reuse_sample_model': reuse_sample_model,
-            'clear_solution_after_each_export': reuse_sample_model,
+            'clear_solution_after_each_export': reuse_sample_model and clear_solution_after_each_export,
             'heartbeat_s': heartbeat_s,
+            'checkpoint_every_cases': checkpoint_every_cases,
             'keep_case_csv': keep_case_csv,
             'progress_file': str(progress_path),
             'response_files': [str(item) for item in response_files],

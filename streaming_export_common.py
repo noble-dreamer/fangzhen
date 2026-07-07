@@ -126,8 +126,8 @@ def apply_solver_arguments(args) -> None:
     shell.CREATE_VISUAL_MARKER_DATASETS = bool(args.include_comsol_marker_datasets)
 
 
-def radial_expression(position: dict[str, float]) -> str:
-    return shell.radial_displacement_expr(position)
+def receiver_expression(position: dict[str, float]) -> str:
+    return shell.receiver_displacement_expr(position)
 
 
 def project_position_to_shell_midsurface(position: dict[str, Any]) -> dict[str, Any]:
@@ -196,7 +196,7 @@ def shell_boundary_selection_node(model):
 def receiver_points_for_current_solution(model):
     solution_dataset = solution_dataset_node(model)
     positions = receiver_shell_positions()
-    expressions = [radial_expression(position) for position in positions]
+    expressions = [receiver_expression(position) for position in positions]
     return solution_dataset, positions, expressions
 
 
@@ -326,13 +326,13 @@ def field_time_space_from_comsol_data(values: np.ndarray, time_count: int) -> np
     raise RuntimeError(f'COMSOL field data has no time axis of length {time_count}: shape={array.shape}')
 
 
-def evaluate_shell_displacement_field(model, solution_dataset, time_count: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return actual shell sample coordinates plus u/v over all stored times."""
+def evaluate_shell_displacement_field(model, solution_dataset, time_count: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return actual shell sample coordinates plus w over all stored times."""
     evaluation = (model / 'evaluations').create('Eval')
     try:
         evaluation.property('data', solution_dataset)
-        evaluation.property('expr', ['u', 'v'])
-        evaluation.property('unit', ['m', 'm'])
+        evaluation.property('expr', ['w'])
+        evaluation.property('unit', ['m'])
         evaluation.property('edim', '2')
         evaluation.select(shell_boundary_selection_node(model))
         java = evaluation.java
@@ -345,25 +345,23 @@ def evaluate_shell_displacement_field(model, solution_dataset, time_count: int) 
 
     if coordinates_mm.ndim != 2 or coordinates_mm.shape[0] != 3 or coordinates_mm.shape[1] == 0:
         raise RuntimeError(f'COMSOL shell evaluation returned invalid coordinates: shape={coordinates_mm.shape}')
-    if values.shape[0] < 2:
-        raise RuntimeError(f'COMSOL shell evaluation returned invalid u/v data shape: {values.shape}')
+    if values.shape[0] < 1:
+        raise RuntimeError(f'COMSOL shell evaluation returned invalid w data shape: {values.shape}')
 
-    u_field = field_time_space_from_comsol_data(values[0], time_count)
-    v_field = field_time_space_from_comsol_data(values[1], time_count)
-    if u_field.shape != v_field.shape or u_field.shape[1] != coordinates_mm.shape[1]:
+    w_field = field_time_space_from_comsol_data(values[0], time_count)
+    if w_field.shape[1] != coordinates_mm.shape[1]:
         raise RuntimeError(
             'COMSOL shell field shape mismatch: '
-            f'u={u_field.shape}, v={v_field.shape}, coordinates={coordinates_mm.shape}'
+            f'w={w_field.shape}, coordinates={coordinates_mm.shape}'
         )
-    if not (np.all(np.isfinite(coordinates_mm)) and np.all(np.isfinite(u_field)) and np.all(np.isfinite(v_field))):
+    if not (np.all(np.isfinite(coordinates_mm)) and np.all(np.isfinite(w_field))):
         raise RuntimeError('COMSOL shell field export returned non-finite coordinates or displacement values.')
-    return coordinates_mm, u_field, v_field
+    return coordinates_mm, w_field
 
 
 def nearest_shell_channels(
     coordinates_mm: np.ndarray,
-    u_field: np.ndarray,
-    v_field: np.ndarray,
+    w_field: np.ndarray,
     positions: list[dict[str, Any]],
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
     coordinate_columns = coordinates_mm.T
@@ -374,8 +372,7 @@ def nearest_shell_channels(
         target = np.asarray([projected['x_mm'], projected['y_mm'], projected['z_mm']], dtype=float)
         distances2 = np.sum((coordinate_columns - target) ** 2, axis=1)
         nearest_index = int(np.argmin(distances2))
-        theta = math.radians(projected['theta_deg'])
-        trace = math.cos(theta) * u_field[:, nearest_index] + math.sin(theta) * v_field[:, nearest_index]
+        trace = w_field[:, nearest_index]
         channels.append(trace)
         nearest.append({
             'receiver': int(projected['index']),
@@ -397,8 +394,8 @@ def evaluate_current_solution_from_nearest_shell_points(
     positions: list[dict[str, Any]],
     time_s: np.ndarray,
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
-    coordinates_mm, u_field, v_field = evaluate_shell_displacement_field(model, solution_dataset, time_s.size)
-    channels, nearest = nearest_shell_channels(coordinates_mm, u_field, v_field, positions)
+    coordinates_mm, w_field = evaluate_shell_displacement_field(model, solution_dataset, time_s.size)
+    channels, nearest = nearest_shell_channels(coordinates_mm, w_field, positions)
     max_distance = max(item['distance_mm'] for item in nearest) if nearest else float('nan')
     console_log(
         '[export] sampled receiver traces from nearest actual shell points; '
@@ -557,7 +554,8 @@ def window_peak(time_s: np.ndarray, envelope: np.ndarray, center_s: float, half_
 
 def write_waveform(path: Path, time_s: np.ndarray, channels: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    header = ['time_s'] + [f'rx{i:02d}_ur_m' for i in range(1, channels.shape[1] + 1)]
+    suffix = shell.receiver_component_column_suffix()
+    header = ['time_s'] + [f'rx{i:02d}_{suffix}' for i in range(1, channels.shape[1] + 1)]
     with path.open('w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(header)

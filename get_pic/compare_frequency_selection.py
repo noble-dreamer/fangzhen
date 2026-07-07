@@ -29,6 +29,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--selected-frequencies", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=cm.DEFAULT_OUTPUT_ROOT / "frequency_selection_compare")
     parser.add_argument("--config", type=Path, default=cm.ROOT / "configs" / "dataset_a_v1.json")
+    parser.add_argument(
+        "--grid-size",
+        type=int,
+        default=None,
+        help="Set both theta_count and z_count. Default comes from config, currently 256.",
+    )
+    parser.add_argument("--theta-count", type=int, default=None, help="Override theta grid count.")
+    parser.add_argument("--z-count", type=int, default=None, help="Override axial z grid count.")
     parser.add_argument("--threshold", type=float, default=0.05)
     parser.add_argument("--preview", action="store_true")
     return parser.parse_args()
@@ -81,6 +89,12 @@ def best_metric(report: dict, channel: str = "ray_relative_delta") -> dict:
 def main() -> None:
     args = parse_args()
     config = cm.CoarseMapConfig.from_json(args.config if args.config.exists() else None)
+    config = cm.apply_grid_overrides(
+        config,
+        grid_size=args.grid_size,
+        theta_count=args.theta_count,
+        z_count=args.z_count,
+    )
     name = sample_name(args.sample_id)
     damaged_path = args.response_dir / f"{name}_H_complex.npz"
     damaged_metadata_path = args.metadata_dir / f"{name}.json"

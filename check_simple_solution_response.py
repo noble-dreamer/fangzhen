@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,9 +50,8 @@ def cases(tx_indices: tuple[int, ...], frequencies_hz: tuple[float, ...]) -> lis
     return result
 
 
-def radial_expression(position: dict) -> str:
-    theta = math.radians(position['theta_deg'])
-    return f'({math.cos(theta):.12g})*u+({math.sin(theta):.12g})*v'
+def receiver_expression(position: dict) -> str:
+    return shell.receiver_displacement_expr(position)
 
 
 def ensure_cutpoint(model, solution_dataset: str, position: dict):
@@ -77,7 +75,7 @@ def main() -> None:
     try:
         positions = shell.receiver_positions()
         datasets = [ensure_cutpoint(model, args.dataset, position) for position in positions]
-        expressions = [radial_expression(position) for position in positions]
+        expressions = [receiver_expression(position) for position in positions]
         for case in cases(parse_int_list(args.tx), parse_float_list(args.frequencies)):
             print(f'CASE tx={case.tx:02d}, f={case.frequency_hz:.0f} Hz, outer={case.outer}')
             time_s = np.asarray(model.evaluate('t', dataset=datasets[0].name(), outer=case.outer), dtype=float).reshape(-1)
@@ -89,8 +87,8 @@ def main() -> None:
                     dtype=float,
                 ).reshape(-1)
                 maxima.append(float(np.nanmax(np.abs(values))))
-                print(f'  rx{index:02d}: max_abs_ur_m={maxima[-1]:.6e}')
-            print(f'  all_rx_max_abs_ur_m={max(maxima):.6e}')
+                print(f'  rx{index:02d}: max_abs_uz_m={maxima[-1]:.6e}')
+            print(f'  all_rx_max_abs_uz_m={max(maxima):.6e}')
     finally:
         client.remove(model)
 

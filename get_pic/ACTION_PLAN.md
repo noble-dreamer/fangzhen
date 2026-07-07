@@ -43,7 +43,7 @@ output:
 核心验收标准：
 
 - 输入频域样本缺健康、缺损伤、频率/tx/rx 不匹配、有效工况为空时，脚本直接报错，不输出伪结果。
-- 输出 `pic` 的空间 shape 与 label 完全一致，默认 `(channel, 512, 512)`。
+- 输出 `pic` 的空间 shape 默认 `(channel, 256, 256)`；若原始 label 为 `512 x 512`，评价和训练前按粗图尺寸下采样。
 - `path_coverage` 非零且无 `NaN`；所有图像通道有限。
 - 在有标签的少量样本上，能计算 Pearson、NRMSE、mask IoU 和缺陷质心误差。
 

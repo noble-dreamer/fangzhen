@@ -7,7 +7,7 @@
 - 管道用 Shell 物理场，几何是圆柱中面。
 - PZT 不再建实体，改为等效面载荷窗口。
 - 缺陷不做几何切割，改为壳厚度局部减薄。
-- 接收端为 16 个接收 PZT patch 的小面积加权平均径向位移时域信号。
+- 接收端为 16 个接收 PZT patch 的小面积加权平均轴向位移时域信号。
 - 网格按最短波长控制，不按 PZT 厚度细化。
 
 主要脚本：
@@ -25,7 +25,7 @@
 - `solve_export_dataset_a_validation_streaming.py`: Dataset A 理想验证集流式脚本，单个规则圆形/椭圆外表面腐蚀缺陷。
 - `solve_export_dataset_a_training_streaming.py`: Dataset A 训练集流式脚本，随机多缺陷/不规则外表面腐蚀缺陷。
 - `solve_export_dataset_b_streaming.py`: Dataset B 流式求解导出脚本，保留自由端和真实实验扰动。
-- `export_simple_waveforms.py`: 对已求解的 MPH 导出 16 路时域径向位移 CSV；不推荐大批量使用。
+- `export_simple_waveforms.py`: 对已求解的 MPH 导出 16 路时域轴向位移 CSV；不推荐大批量使用。
 - `inspect_simple_model.py`: 检查接收端、参数扫描和网格设置。
 - `check_simple_solution_response.py`: 对已求解 MPH 检查接收通道是否有非零响应。
 - `debug_shell_model_tree.py`: 打印材料、壳厚、载荷、接收端等模型树关键属性。
@@ -52,7 +52,7 @@
 - `--include-healthy`: 先生成健康样本，再生成缺陷样本。
 - `--only-healthy`: 只生成健康样本，适合单工况收敛/export 检查。
 - `--samples`: 随机缺陷样本数，validation 脚本不用这个参数。
-- `--output-root`: 输出目录；不传时默认写入 `simple/output/...`。
+- `--output-root`: 输出目录；不传时默认写入 `simple/output2/...`。
 - `--healthy-waveform-root` 和 `--healthy-waveform-sample-id`: 使用已有健康波形计算健康-损伤差分特征。
 - `--heartbeat-s`: COMSOL 阻塞求解期间的心跳间隔，默认 30 秒。
 - `--dt-out-us`: 输出时间步和严格最大时间步，默认 `0.5`。
@@ -107,25 +107,25 @@ conda run --no-capture-output -n comsol python -u simple/solve_export_dataset_a_
 
 默认输出目录：
 
-- `solve_export_dataset_a_validation_streaming.py`: `simple/output/streaming_dataset_a_validation_shell/`
-- `solve_export_dataset_a_training_streaming.py`: `simple/output/streaming_dataset_a_training_shell/`
-- `solve_export_dataset_a_streaming.py`: `simple/output/streaming_dataset_a_shell/`
-- `solve_export_dataset_b_streaming.py`: `simple/output/streaming_dataset_b_shell/`
+- `solve_export_dataset_a_validation_streaming.py`: `simple/output2/streaming_dataset_a_validation_shell/`
+- `solve_export_dataset_a_training_streaming.py`: `simple/output2/streaming_dataset_a_training_shell/`
+- `solve_export_dataset_a_streaming.py`: `simple/output2/streaming_dataset_a_shell/`
+- `solve_export_dataset_b_streaming.py`: `simple/output2/streaming_dataset_b_shell/`
 
 默认流式策略是每个样本只建立一次 COMSOL 模型、网格和 solver tree，然后逐工况修改 `tx` 与 `pzt_fc`，求解、导出 CSV/特征后调用 `clearSolutionData()` 清掉当前瞬态场解。这样能省掉重复建模和划网格时间，同时仍避免保存或累积 48 个工况的全场解。
 
 ## 目录结构
 
 - `simple/`: 轻量 shell 仿真与导出脚本。
-- `simple/output/dataset_a_shell/`: Dataset A 健康壳 MPH、metadata 和 build log。
-- `simple/output/dataset_b_shell/`: Dataset B 健康壳 MPH、metadata 和 build log。
-- `simple/output/generated_dataset_a_shell/`: Dataset A 随机缺陷 MPH、metadata 和 manifest。
-- `simple/output/generated_dataset_b_shell/`: Dataset B 随机缺陷 MPH、metadata 和 manifest。
-- `simple/output/streaming_dataset_a_validation_shell/`: 推荐的 A_validation 流式输出目录，运行后生成。
-- `simple/output/streaming_dataset_a_training_shell/`: 推荐的 A_training 流式输出目录，运行后生成。
-- `simple/output/streaming_dataset_b_shell/`: Dataset B 流式输出目录，运行后生成。
+- `simple/output2/dataset_a_shell/`: Dataset A 健康壳 MPH、metadata 和 build log。
+- `simple/output2/dataset_b_shell/`: Dataset B 健康壳 MPH、metadata 和 build log。
+- `simple/output2/generated_dataset_a_shell/`: Dataset A 随机缺陷 MPH、metadata 和 manifest。
+- `simple/output2/generated_dataset_b_shell/`: Dataset B 随机缺陷 MPH、metadata 和 manifest。
+- `simple/output2/streaming_dataset_a_validation_shell/`: 推荐的 A_validation 流式输出目录，运行后生成。
+- `simple/output2/streaming_dataset_a_training_shell/`: 推荐的 A_training 流式输出目录，运行后生成。
+- `simple/output2/streaming_dataset_b_shell/`: Dataset B 流式输出目录，运行后生成。
 
-路径约定：默认输出路径都相对于 `simple/` 目录计算，即 `simple_shell_common.py` 中的 `ROOT / 'output'`。因此把整个项目移动到 Windows 服务器的其他目录后，默认输出仍会落在新位置的 `simple/output/` 下。需要把数据写到单独的数据盘时，再通过 `--output-root` 或 `--healthy-waveform-root` 传入显式路径。
+路径约定：默认输出路径都相对于 `simple/` 目录计算，即 `simple_shell_common.py` 中的 `ROOT / 'output2'`。因此把整个项目移动到 Windows 服务器的其他目录后，默认输出仍会落在新位置的 `simple/output2/` 下。需要把数据写到单独的数据盘时，再通过 `--output-root` 或 `--healthy-waveform-root` 传入显式路径。
 
 流式输出目录内部约定：
 
@@ -183,7 +183,7 @@ conda run -n comsol python simple/generate_dataset_a_defects.py
 计算完成后导出单工况示例：
 
 ```powershell
-conda run -n comsol python simple/export_simple_waveforms.py --model simple/output/dataset_a_shell/pipe_shell_healthy.mph --output-root simple/output/dataset_a_shell --sample-id pipe_shell_healthy --tx 1 --frequencies 50000
+conda run -n comsol python simple/export_simple_waveforms.py --model simple/output2/dataset_a_shell/pipe_shell_healthy.mph --output-root simple/output2/dataset_a_shell --sample-id pipe_shell_healthy --tx 1 --frequencies 50000
 ```
 
 `build_dataset_a_healthy.py` 和流式 Dataset A 脚本都调用 `simple_shell_common.py` 的同一套建模函数，并使用同一类物理设置：壳几何、材料、两端 absorbing layer、外表面腐蚀约定、等效 PZT 面载荷、16 个接收 patch 加权平均和默认求解器配置。区别在于：
@@ -264,13 +264,13 @@ conda run --no-capture-output -n comsol python -u simple/solve_export_dataset_a_
 流式脚本在写出样本 metadata 时会自动生成 `labels/` 标签包。也可以在不启动 COMSOL 的情况下，对已有 metadata 单独补生成：
 
 ```powershell
-python simple/export_defect_labels.py --metadata simple/output/generated_dataset_a_shell/metadata/dataset_a_shell_sample_0001.json
+python simple/export_defect_labels.py --metadata simple/output2/generated_dataset_a_shell/metadata/dataset_a_shell_sample_0001.json
 ```
 
 批量导出并生成类似 `generate_defect/show_defect.png` 的预览拼图：
 
 ```powershell
-python simple/export_defect_labels.py --metadata simple/output/generated_dataset_a_shell/metadata --montage
+python simple/export_defect_labels.py --metadata simple/output2/generated_dataset_a_shell/metadata --montage
 ```
 
 标签坐标约定：
@@ -321,14 +321,14 @@ COMSOL recovery/temp 目录。
 - 等效激励：`Component 1 > Shell Mechanics > equivalent transducer face load`
 - 当前激励编号：`Global Definitions > Parameters > tx`
 - 当前激励频率：`Global Definitions > Parameters > pzt_fc`
-- 激励脉冲函数：`Global Definitions > Functions > five-cycle Hanning sine`
-- 接收加权平均：`Results > Derived Values > receiver patch weighted average radial displacement`
+- 激励脉冲函数：`Global Definitions > Functions > raised-cosine tapered sine burst`
+- 接收加权平均：`Results > Derived Values > receiver patch weighted average axial displacement`
 - 可选接收点标记：`Results > Datasets > receiver PZT 17 point` 到 `receiver PZT 32 point`
 - 可视化标记点：`Results > Datasets > transmitter PZT marker points` 和 `receiver PZT marker points`
 
 注意：激励位置不是几何里的独立 PZT 面片。它们被写在 `equivalent transducer face load` 的 `F` 表达式里，通过以 `tx` 为开关的空间窗口函数激活对应发射点。这样做是为了避免 PZT 小尺寸强制局部加密网格。
 
-真实接收输出不是数学单点插值，而是使用 `intop_shell(w_rx*u_r)/intop_shell(w_rx)` 在接收 PZT patch 窗口内做小面积加权平均。`receiver PZT xx point` 这类 CutPoint 数据集主要用于打开模型时检查中心位置，不作为当前流式导出的主数据源。
+真实接收输出不是数学单点插值，而是使用 `intop_shell(w_rx*w)/intop_shell(w_rx)` 在接收 PZT patch 窗口内做小面积加权平均。`receiver PZT xx point` 这类 CutPoint 数据集主要用于打开模型时检查中心位置，不作为当前流式导出的主数据源。
 
 健康模型的厚度显示为 `h0`。缺陷模型的厚度显示为 `max(h_min, h0 - (...))`，其中括号里是多个缺陷/凸瓣对应的厚度减薄窗口。
 
@@ -352,11 +352,11 @@ pzt_fc = 一个 tone-burst 中心频率，默认 40000, 50000, 60000 Hz
 t = 0 : dt_out : t_end
 ```
 
-COMSOL 求解时保存的是当前工况的壳中面时域位移场，包括全局 `u/v/w` 位移和 Shell 相关自由度。流式导出不会保存这些大体积场解，而是立即把每个接收 PZT patch 上的径向位移加权平均成 16 路时间信号：
+COMSOL 求解时保存的是当前工况的壳中面时域位移场，包括全局 `u/v/w` 位移和 Shell 相关自由度。流式导出不会保存这些大体积场解，而是立即把每个接收 PZT patch 上的轴向位移加权平均成 16 路时间信号：
 
 ```text
-u_r = cos(theta_rx) * u + sin(theta_rx) * v
-rx_channel(t) = intop_shell(w_rx * u_r) / intop_shell(w_rx)
+u_z = w
+rx_channel(t) = intop_shell(w_rx * u_z) / intop_shell(w_rx)
 ```
 
 因此 `csv/waveforms/*_waveforms.csv` 是后续时域层析和螺旋阶次分析最直接的数据。时域数据保留了传播先后顺序，所以可以提取首波 TOF、包络峰值时间，以及 Γ0、Γ1、Γ-1 等螺旋路径附近的窗口峰值。
@@ -379,7 +379,7 @@ rx_channel(t) = intop_shell(w_rx * u_r) / intop_shell(w_rx)
 | 字段 | 含义 | 单位/备注 |
 | --- | --- | --- |
 | `time_s` | 时域采样时刻 | s |
-| `rx01_ur_m` 到 `rx16_ur_m` | 16 个接收 PZT patch 的径向位移加权平均 | m；`rx01` 对应 PZT17，`rx16` 对应 PZT32 |
+| `rx01_uz_m` 到 `rx16_uz_m` | 16 个接收 PZT patch 的轴向位移加权平均 | m；`rx01` 对应 PZT17，`rx16` 对应 PZT32 |
 
 `csv/tomography_features/<sample>_tomography_features.csv` 每行对应一个 `tx + frequency + rx_channel`。
 

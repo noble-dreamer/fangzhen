@@ -34,8 +34,8 @@ fine_defect = diffusion(condition_image=pic(x), condition_data=x)
 频域模型沿用当前 `simple_shell_common.py` 的几何、材料、壳厚缺陷、等效 PZT 面载荷和接收 patch 加权平均：
 
 ```text
-receiver = intop_shell(w_rx * u_r) / intop_shell(w_rx)
-u_r      = cos(theta_rx) * u + sin(theta_rx) * v
+receiver = intop_shell(w_rx * w) / intop_shell(w_rx)
+u_z      = w
 ```
 
 与时域不同的是，载荷不使用 `pztpulse(t)`，而是单位谐波等效面力：

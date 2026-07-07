@@ -76,6 +76,22 @@ def parse_args() -> argparse.Namespace:
         action='store_true',
         help='Also keep per-case tx/frequency CSV files. Default is to keep only the cumulative sample CSV.',
     )
+    parser.add_argument(
+        '--checkpoint-every-cases',
+        type=int,
+        default=1,
+        help='Rewrite cumulative CSV/NPZ every N cases. Use 0 to write only at sample end. Default preserves old behavior.',
+    )
+    parser.add_argument(
+        '--checkpoint-final-only',
+        action='store_true',
+        help='Equivalent to --checkpoint-every-cases 0; fastest disk mode but least resumable within a sample.',
+    )
+    parser.add_argument(
+        '--keep-solution-data-between-cases',
+        action='store_true',
+        help='Do not call clearSolutionData() after each reusable-model case. Benchmark only; may increase COMSOL memory use.',
+    )
     fcommon.add_frequency_solver_arguments(parser)
     parser.add_argument('--cores', type=int, default=None)
     parser.add_argument('--keep-client-cache', action='store_true')
@@ -277,15 +293,25 @@ def should_solve_healthy(
     if complete:
         return False, reason
     if healthy_npz.exists() and ('mismatch' in reason or 'shape' in reason):
+        subset_hint = ''
+        if 'frequency mismatch' in reason:
+            subset_hint = (
+                ' If the existing healthy baseline is a superset full sweep, create a subset healthy baseline with '
+                'simple/f_domain/subset_frequency_response.py and pass --healthy-sample-id for that subset.'
+            )
         raise RuntimeError(
             f'Existing healthy baseline {healthy_npz} is not compatible with the requested cases: {reason}. '
             'Use a different --healthy-sample-id to keep both baselines, or pass --force-healthy to overwrite it.'
+            + subset_hint
         )
     return True, reason
 
 
 def main() -> None:
     args = parse_args()
+    checkpoint_every_cases = 0 if args.checkpoint_final_only else args.checkpoint_every_cases
+    if checkpoint_every_cases < 0:
+        raise ValueError(f'--checkpoint-every-cases must be >= 0, got {checkpoint_every_cases}')
     fcommon.configure_dataset_a_frequency(use_parametric_sweep=False)
     fcommon.apply_solver_arguments(args)
     if any(value is not None for value in (args.frequency_start_khz, args.frequency_stop_khz, args.frequency_step_khz)):
@@ -363,12 +389,14 @@ def main() -> None:
                     defects=[],
                     lobes=[],
                     sample_metadata={'sample_id': 0, 'seed': None, 'defects': [], 'lobes': []},
-                clear_each_case=clear_each_case,
-                heartbeat_s=args.heartbeat_s,
-                reuse_sample_model=not args.rebuild_each_case,
-                write_label_preview=not args.skip_label_preview,
-                keep_case_csv=args.keep_case_csv,
-            )
+                    clear_each_case=clear_each_case,
+                    heartbeat_s=args.heartbeat_s,
+                    reuse_sample_model=not args.rebuild_each_case,
+                    write_label_preview=not args.skip_label_preview,
+                    keep_case_csv=args.keep_case_csv,
+                    checkpoint_every_cases=checkpoint_every_cases,
+                    clear_solution_after_each_export=not args.keep_solution_data_between_cases,
+                )
                 rows.append(result_row(result, None, 0, 0))
 
         if not args.only_healthy:
@@ -398,6 +426,8 @@ def main() -> None:
                     reuse_sample_model=not args.rebuild_each_case,
                     write_label_preview=not args.skip_label_preview,
                     keep_case_csv=args.keep_case_csv,
+                    checkpoint_every_cases=checkpoint_every_cases,
+                    clear_solution_after_each_export=not args.keep_solution_data_between_cases,
                 )
                 rows.append(result_row(result, seed, len(sample.defects), len(sample.lobes)))
     finally:

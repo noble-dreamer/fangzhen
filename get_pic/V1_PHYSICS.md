@@ -7,7 +7,7 @@ V1 的目标不是直接求出真实壁厚损失，而是把频域测量矩阵 `
 频域仿真导出的是复响应：
 
 ```text
-H(tx, rx, f) = receiver patch weighted radial displacement
+H(tx, rx, f) = receiver patch weighted axial displacement
 ```
 
 健康样本为 `H0`，损伤样本为 `Hd`。V1 不直接使用 `abs(Hd)`，而是使用健康-损伤差异：

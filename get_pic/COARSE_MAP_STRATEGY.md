@@ -119,7 +119,7 @@ coordinate = unfolded outer pipe surface, theta-z
 shape      = (z_index, theta_index)
 theta      = 0 <= theta < 360 deg, periodic
 z          = 0 <= z <= L_pipe
-default    = 512 x 512
+default    = 256 x 256
 ```
 
 生成粗图时不能使用标签；标签只用于：
@@ -546,7 +546,7 @@ coverage-weighted false positive rate
 
 - `defect_label_common.py`
   - label 是展开外表面 `theta-z` 图。
-  - 默认 shape 为 `512 x 512`。
+  - 默认 shape 为 `256 x 256`；如需高分辨率复算，可用 `--grid-size 512` 或修改 `configs/dataset_a_v1.json`。
   - 缺陷标签是厚度损失 `depth_mm/depth_norm`，适合作为 diffusion 目标。
 
 - `streaming_export_common.py`

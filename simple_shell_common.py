@@ -17,7 +17,7 @@ import mph
 
 
 ROOT = Path(__file__).resolve().parent
-OUTPUT_ROOT = ROOT / 'output'
+OUTPUT_ROOT = ROOT / 'output2'
 DEFECT_WINDOW_POWER = 2
 DEFECT_LOSS_MAX_MM = 5.0
 
@@ -47,6 +47,9 @@ class TransducerConfig:
     total_force_n: float = 1.0
     center_frequency_hz: float = 50_000.0
     cycles: int = 5
+    drive_axis: str = 'axial_z'
+    pulse_shape: str = 'raised_cosine_sine'
+    taper_cycles: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -195,14 +198,108 @@ def radial_displacement_expr(position: dict) -> str:
     return f'({math.cos(theta):.12g})*u+({math.sin(theta):.12g})*v'
 
 
+def axial_displacement_expr(position: dict | None = None) -> str:
+    return 'w'
+
+
+def transducer_drive_axis_description(axis: str | None = None) -> str:
+    drive_axis = (axis or TRANSDUCER.drive_axis).lower()
+    if drive_axis == 'radial':
+        return 'surface-normal radial face load on the cylindrical shell'
+    if drive_axis == 'axial_z':
+        return 'axial z-direction tangential face load on the cylindrical shell'
+    if drive_axis == 'circumferential':
+        return 'circumferential tangential face load on the cylindrical shell'
+    raise ValueError(f'Unsupported transducer drive_axis={axis!r}')
+
+
+def transducer_pulse_shape_description(pulse_shape: str | None = None) -> str:
+    shape = (pulse_shape or TRANSDUCER.pulse_shape).lower()
+    if shape == 'hann_sine':
+        return 'Hanning-windowed sine burst'
+    if shape == 'raised_cosine_sine':
+        return 'raised-cosine tapered sine burst with a flat center section'
+    raise ValueError(f'Unsupported transducer pulse_shape={pulse_shape!r}')
+
+
+def transducer_load_vector_terms(position: dict, scale: str, drive_axis: str | None = None) -> list[str]:
+    axis = (drive_axis or TRANSDUCER.drive_axis).lower()
+    theta = math.radians(position['theta_deg'])
+    if axis == 'radial':
+        return [
+            f'({math.cos(theta):.12g})*({scale})',
+            f'({math.sin(theta):.12g})*({scale})',
+            '0',
+        ]
+    if axis == 'axial_z':
+        return ['0', '0', f'({scale})']
+    if axis == 'circumferential':
+        return [
+            f'({-math.sin(theta):.12g})*({scale})',
+            f'({math.cos(theta):.12g})*({scale})',
+            '0',
+        ]
+    raise ValueError(f'Unsupported transducer drive_axis={drive_axis!r}')
+
+
+def pulse_expression_and_name() -> tuple[str, str]:
+    shape = TRANSDUCER.pulse_shape.lower()
+    duration = 'pzt_cycles/pzt_fc'
+    if shape == 'hann_sine':
+        return (
+            'if(t<=pzt_cycles/pzt_fc, '
+            'sin(2*pi*pzt_fc*t)*0.5*(1-cos(2*pi*t/(pzt_cycles/pzt_fc))), 0)',
+            'Hanning-windowed sine burst',
+        )
+    if shape == 'raised_cosine_sine':
+        taper = 'min((pzt_cycles/pzt_fc)/2, pzt_taper_cycles/(2*pzt_fc))'
+        return (
+            'if(t<=' + duration + ', '
+            'sin(2*pi*pzt_fc*t)*'
+            'if((' + taper + ')<=0, 1, '
+            'if(t<(' + taper + '), 0.5*(1-cos(pi*t/(' + taper + '))), '
+            'if(t>(' + duration + '-(' + taper + ')), '
+            '0.5*(1-cos(pi*((' + duration + ')-t)/(' + taper + '))), 1))), 0)',
+            'raised-cosine tapered sine burst',
+        )
+    raise ValueError(f'Unsupported transducer pulse_shape={TRANSDUCER.pulse_shape!r}')
+
+
 def receiver_window_expr(position: dict, width_name: str = 'pzt_w', length_name: str = 'pzt_l') -> str:
     return patch_window_expr(position['theta_deg'], position['z_mm'], width_name, length_name)
 
 
+def receiver_displacement_expr(position: dict) -> str:
+    return axial_displacement_expr(position)
+
+
+def receiver_component_name() -> str:
+    return 'axial displacement'
+
+
+def receiver_component_symbol() -> str:
+    return 'u_z'
+
+
+def receiver_component_column_suffix() -> str:
+    return 'uz_m'
+
+
+def receiver_complex_column_names() -> tuple[str, str, str, str]:
+    suffix = receiver_component_column_suffix()
+    base = suffix[:-2] if suffix.endswith('_m') else suffix
+    return (
+        f'real_{base}_m',
+        f'imag_{base}_m',
+        f'abs_{base}_m',
+        'phase_rad',
+    )
+
+
 def receiver_weighted_average_expr(position: dict, operator: str = RECEIVER_INTEGRATION_OPERATOR) -> str:
     window = receiver_window_expr(position)
-    radial = radial_displacement_expr(position)
-    return f'{operator}(({window})*({radial}))/({operator}({window}))'
+    component = receiver_displacement_expr(position)
+    return f'{operator}(({window})*({component}))/({operator}({window}))'
 
 
 def receiver_weighted_average_expressions() -> list[str]:
@@ -232,7 +329,11 @@ def add_parameters(model, damaged: bool) -> None:
         'pzt_A': ('pzt_w*pzt_l', 'Equivalent transducer patch area'),
         'F0': (f'{TRANSDUCER.total_force_n:.9g}[N]', 'Equivalent total force amplitude'),
         'pzt_fc': (f'{TRANSDUCER.center_frequency_hz:.9g}[Hz]', 'Excitation center frequency'),
-        'pzt_cycles': (f'{TRANSDUCER.cycles}', 'Hanning-windowed sine cycles'),
+        'pzt_cycles': (f'{TRANSDUCER.cycles}', 'Excitation carrier cycles'),
+        'pzt_taper_cycles': (
+            f'{TRANSDUCER.taper_cycles:.9g}',
+            'Raised-cosine taper cycles used by the configured burst pulse shape',
+        ),
         'tx': (f'{SWEEP.transmitter_indices[0]}', 'Active transmitter index'),
         't_end': (f'{SOLVER.t_end_ms:.9g}[ms]', 'Transient end time'),
         'dt_out': (f'{SOLVER.dt_out_us:.9g}[us]', 'Output time step'),
@@ -368,30 +469,26 @@ def rayleigh_beta_expression() -> str:
 
 
 def load_vector_expression() -> list[str]:
-    x_terms: list[str] = []
-    y_terms: list[str] = []
+    terms = [[], [], []]
     for item in transmitter_positions():
-        theta = math.radians(item['theta_deg'])
         gate = f'if(tx=={item["index"]},1,0)'
         window = patch_window_expr(item['theta_deg'], item['z_mm'])
         scale = f'{item["amplitude_scale"]:.9g}*{gate}*F0/pzt_A*pztpulse(t)*({window})'
-        x_terms.append(f'({math.cos(theta):.12g})*({scale})')
-        y_terms.append(f'({math.sin(theta):.12g})*({scale})')
-    return ['+'.join(x_terms) or '0', '+'.join(y_terms) or '0', '0']
+        for component_index, term in enumerate(transducer_load_vector_terms(item, scale)):
+            if term != '0':
+                terms[component_index].append(term)
+    return ['+'.join(component_terms) or '0' for component_terms in terms]
 
 
 def create_functions(model) -> None:
-    pulse = (model / 'functions').create('Analytic', name='five-cycle Hanning sine')
+    expression, pulse_name = pulse_expression_and_name()
+    pulse = (model / 'functions').create('Analytic', name=pulse_name)
     pulse.property('funcname', 'pztpulse')
     pulse.property('args', 't')
-    pulse.property(
-        'expr',
-        'if(t<=pzt_cycles/pzt_fc, '
-        'sin(2*pi*pzt_fc*t)*0.5*(1-cos(2*pi*t/(pzt_cycles/pzt_fc))), 0)',
-    )
+    pulse.property('expr', expression)
     set_if_possible(pulse, 'argunit', 's')
     set_if_possible(pulse, 'fununit', '1')
-    pulse.property('plotargs', ['t', '0', '150[us]'])
+    pulse.property('plotargs', ['t', '0', '1.2*pzt_cycles/pzt_fc'])
 
 
 def create_shell_physics(model, geometry, shell_selection, defects: list[DefectConfig], lobes: list[DefectLobeConfig]):
@@ -456,7 +553,8 @@ def create_shell_physics(model, geometry, shell_selection, defects: list[DefectC
         'Equivalent transducer load. Smooth spatial windows replace PZT solid '
         'domains, so mesh size is controlled by wavelength rather than PZT size. '
         'The active transmitter is selected by global parameter tx; the window '
-        'centers are listed in the generated metadata and build log.'
+        'centers are listed in the generated metadata and build log. '
+        f'drive_axis={TRANSDUCER.drive_axis} ({transducer_drive_axis_description()}).'
     )
     return shell
 
@@ -474,10 +572,10 @@ def create_receiver_average_operator(model, shell_selection) -> None:
 
 def create_receiver_average_evaluation(model) -> None:
     tables = model / 'tables'
-    table = tables.create('Table', name='receiver weighted average radial displacement table')
+    table = tables.create('Table', name='receiver weighted average axial displacement table')
     evaluation = (model / 'evaluations').create(
         'EvalGlobal',
-        name='receiver patch weighted average radial displacement',
+        name='receiver patch weighted average axial displacement',
     )
     positions = receiver_positions()
     evaluation.property('probetag', 'none')
@@ -485,13 +583,13 @@ def create_receiver_average_evaluation(model) -> None:
     evaluation.property('expr', receiver_weighted_average_expressions())
     evaluation.property('unit', ['m'] * len(positions))
     evaluation.property('descr', [
-        f'PZT {position["index"]:02d} patch weighted average radial displacement'
+        f'PZT {position["index"]:02d} patch weighted average axial displacement'
         for position in positions
     ])
     evaluation.comment(
         'Receiver channels are small patch-weighted averages on the shell '
         f'boundary using {RECEIVER_INTEGRATION_OPERATOR}. Each channel evaluates '
-        'intop_shell(w_rx*(cos(theta_rx)*u+sin(theta_rx)*v))/intop_shell(w_rx), '
+        'intop_shell(w_rx*w)/intop_shell(w_rx), '
         'with the receiver window centered at the configured PZT position.'
     )
 
@@ -602,7 +700,7 @@ def create_receiver_datasets(model) -> None:
         dataset.property('pointx', f'{item["x_mm"]:.12g}[mm]')
         dataset.property('pointy', f'{item["y_mm"]:.12g}[mm]')
         dataset.property('pointz', f'{item["z_mm"]:.12g}[mm]')
-        dataset.comment('Receiver point for radial shell displacement export.')
+        dataset.comment('Receiver point for axial shell displacement export.')
 
 
 def create_marker_dataset(model, name: str, positions: list[dict], comment: str) -> None:
@@ -706,7 +804,9 @@ def write_build_log(path: Path, saved: Iterable[Path], problems: dict[str, objec
 - Pipe is a cylindrical shell midsurface at `Rm = {(PIPE.mid_radius_mm):.3f} mm`.
 - Wall loss defects are represented by spatially varying shell thickness, not Boolean corrosion cuts.
 - PZT solids are removed. Excitation is an equivalent face load with a smooth transducer window.
-- Receivers are 16 patch-weighted shell displacement averages on the receiver ring.
+- Equivalent actuation direction: `{TRANSDUCER.drive_axis}` = {transducer_drive_axis_description()}.
+- Time-domain burst pulse: `{TRANSDUCER.pulse_shape}` = {transducer_pulse_shape_description()}.
+- Receivers are 16 patch-weighted shell axial-displacement averages on the receiver ring.
 - Mesh is controlled by wavelength: `hmax = {MESH.hmax_mm:.3f} mm`, not by PZT block dimensions.
 
 ## Where to find the important settings in COMSOL Model Builder
@@ -715,8 +815,8 @@ def write_build_log(path: Path, saved: Iterable[Path], problems: dict[str, objec
 - Explicit shell material: `Component 1 > Shell Mechanics > explicit aluminum shell elastic material`.
 - Equivalent excitation: `Component 1 > Shell Mechanics > equivalent transducer face load`.
 - Active transmitter/frequency: `Global Definitions > Parameters`, then `tx` and `pzt_fc`.
-- Excitation pulse: `Global Definitions > Functions > five-cycle Hanning sine`.
-- Receiver weighted averages: `Results > Derived Values > receiver patch weighted average radial displacement`.
+- Excitation pulse: `Global Definitions > Functions > {pulse_expression_and_name()[1]}`.
+- Receiver weighted averages: `Results > Derived Values > receiver patch weighted average axial displacement`.
 - Optional receiver point markers: `Results > Datasets > receiver PZT 17 point` through `receiver PZT 32 point`.
 
 The excitation and receiver patches are not separate geometric PZT faces. Their positions are encoded as smooth spatial windows so they do not force local mesh refinement.
@@ -759,7 +859,16 @@ def model_metadata(dataset: str, defect_state: str, model_path: Path | str | Non
             'type': 'patch_weighted_average',
             'integration_operator': RECEIVER_INTEGRATION_OPERATOR,
             'window': 'same super-Gaussian shell window form as the equivalent PZT load',
-            'expression': 'intop_shell(w_rx*(cos(theta_rx)*u+sin(theta_rx)*v))/intop_shell(w_rx)',
+            'component_name': receiver_component_name(),
+            'component_symbol': receiver_component_symbol(),
+            'component_column_suffix': receiver_component_column_suffix(),
+            'expression': 'intop_shell(w_rx*w)/intop_shell(w_rx)',
+        },
+        'actuation_model': {
+            'drive_axis': TRANSDUCER.drive_axis,
+            'drive_axis_description': transducer_drive_axis_description(),
+            'pulse_shape': TRANSDUCER.pulse_shape,
+            'pulse_shape_description': transducer_pulse_shape_description(),
         },
         'create_receiver_datasets': CREATE_RECEIVER_DATASETS,
         'create_visual_marker_datasets': CREATE_VISUAL_MARKER_DATASETS,
