@@ -110,26 +110,29 @@ class RayOperator(nn.Module):
         y = image[:, :1]
         return torch.einsum("bchw,rhw->br", y, self.kernels)
 
-    def observed_from_x(self, x_matrix: torch.Tensor, feature_index: int = 1) -> torch.Tensor:
+    def observed_frequency_from_x(self, x_matrix: torch.Tensor, feature_index: int = 1) -> torch.Tensor:
         if x_matrix.ndim != 5:
             raise RuntimeError(f"x_matrix must be (B,C,F,TX,RX), got {tuple(x_matrix.shape)}")
-        obs = x_matrix[:, feature_index].mean(dim=1)
-        obs = obs.reshape(obs.shape[0], -1)
+        obs = x_matrix[:, feature_index]
+        obs = obs.reshape(obs.shape[0], obs.shape[1], -1)
         if len(self.geometry.helical_orders) > 1:
-            obs = obs.repeat_interleave(len(self.geometry.helical_orders), dim=1)
+            obs = obs.repeat_interleave(len(self.geometry.helical_orders), dim=2)
         return obs
 
     @staticmethod
     def robust_normalize(values: torch.Tensor) -> torch.Tensor:
-        center = values.median(dim=1, keepdim=True).values
-        mad = (values - center).abs().median(dim=1, keepdim=True).values.clamp_min(1e-6)
-        return ((values - center) / mad).clamp(-8.0, 8.0)
+        flat = values.reshape(values.shape[0], -1)
+        center = flat.median(dim=1, keepdim=True).values
+        mad = (flat - center).abs().median(dim=1, keepdim=True).values.clamp_min(1e-6)
+        normalized = ((flat - center) / mad).clamp(-8.0, 8.0)
+        return normalized.reshape_as(values)
 
     def consistency_loss(self, image: torch.Tensor, x_matrix: torch.Tensor, feature_index: int = 1) -> torch.Tensor:
-        pred = self.robust_normalize(self.forward(image))
-        obs = self.robust_normalize(self.observed_from_x(x_matrix, feature_index=feature_index))
+        pred = self.forward(image)
+        obs = self.observed_frequency_from_x(x_matrix, feature_index=feature_index)
+        pred = pred[:, None, :].expand(-1, obs.shape[1], -1)
         if pred.shape != obs.shape:
-            min_dim = min(pred.shape[1], obs.shape[1])
-            pred = pred[:, :min_dim]
-            obs = obs[:, :min_dim]
-        return F.smooth_l1_loss(pred, obs)
+            min_dim = min(pred.shape[2], obs.shape[2])
+            pred = pred[:, :, :min_dim]
+            obs = obs[:, :, :min_dim]
+        return F.smooth_l1_loss(self.robust_normalize(pred), self.robust_normalize(obs))

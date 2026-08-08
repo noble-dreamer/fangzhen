@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from data.dataset import build_dataset_from_config
 from models import ConditionalRegressor
+from physics.ray_operator import RayOperator
 from train_diffusion import build_model as build_diffusion_model
 from train_regressor import build_model as build_regressor_model
 from utils.config import ensure_dir, load_config
@@ -39,6 +40,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-ema", action="store_true")
     parser.add_argument("--thresholds", type=float, nargs="*", default=[0.1, 0.2, 0.3])
     parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument("--physics-guidance-scale", type=float, default=0.0)
+    parser.add_argument("--physics-guidance-start-fraction", type=float, default=0.5)
+    parser.add_argument("--physics-feature-index", type=int, default=1)
     return parser.parse_args()
 
 
@@ -69,11 +73,29 @@ def regression_metrics(pred: np.ndarray, target: np.ndarray, thresholds: list[fl
     return result
 
 
-@torch.no_grad()
-def predict_batch(model, model_type: str, batch: dict, steps: int | None) -> torch.Tensor:
+def predict_batch(
+    model,
+    model_type: str,
+    batch: dict,
+    steps: int | None,
+    *,
+    physics_operator=None,
+    physics_guidance_scale: float = 0.0,
+    physics_guidance_start_fraction: float = 0.5,
+    physics_feature_index: int = 1,
+) -> torch.Tensor:
     if model_type == "regressor":
-        return model(batch["pic"], batch["x_matrix"])
-    return model.sample(batch["pic"], batch["x_matrix"], steps=steps)
+        with torch.no_grad():
+            return model(batch["pic"], batch["x_matrix"])
+    return model.sample(
+        batch["pic"],
+        batch["x_matrix"],
+        steps=steps,
+        physics_operator=physics_operator,
+        physics_guidance_scale=physics_guidance_scale,
+        physics_guidance_start_fraction=physics_guidance_start_fraction,
+        physics_feature_index=physics_feature_index,
+    )
 
 
 def main() -> None:
@@ -96,6 +118,10 @@ def main() -> None:
         state_key = "ema" if args.use_ema and "ema" in checkpoint else "model"
         model.load_state_dict(checkpoint[state_key], strict=True)
         model.eval()
+    physics_operator = None
+    if args.pred_dir is None and args.model_type == "diffusion" and args.physics_guidance_scale > 0.0:
+        image_size = int(config.get("data", {}).get("image_size", 256))
+        physics_operator = RayOperator(image_shape=(image_size, image_size)).to(device)
     rows = []
     for index, batch in enumerate(tqdm(loader, desc="evaluating", dynamic_ncols=True)):
         if args.max_samples is not None and index >= args.max_samples:
@@ -109,7 +135,16 @@ def main() -> None:
             pred_np = np.asarray(np.load(pred_path), dtype=np.float32)
         else:
             batch = move_batch(batch, device)
-            pred = predict_batch(model, args.model_type, batch, args.steps or config.get("sample", {}).get("steps", 50))
+            pred = predict_batch(
+                model,
+                args.model_type,
+                batch,
+                args.steps or config.get("sample", {}).get("steps", 50),
+                physics_operator=physics_operator,
+                physics_guidance_scale=args.physics_guidance_scale,
+                physics_guidance_start_fraction=args.physics_guidance_start_fraction,
+                physics_feature_index=args.physics_feature_index,
+            )
             pred_np = pred[0, 0].detach().cpu().numpy().astype(np.float32)
             target_np = batch["target"][0, 0].detach().cpu().numpy().astype(np.float32)
         if pred_np.shape != target_np.shape:

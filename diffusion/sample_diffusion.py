@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from data.dataset import build_dataset_from_config
 from models import GaussianDiffusion
+from physics.ray_operator import RayOperator
 from train_diffusion import build_model
 from utils.checkpoint import load_checkpoint
 from utils.config import ensure_dir, load_config
@@ -35,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eta", type=float, default=0.0)
     parser.add_argument("--use-ema", action="store_true")
     parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument("--physics-guidance-scale", type=float, default=0.0)
+    parser.add_argument("--physics-guidance-start-fraction", type=float, default=0.5)
+    parser.add_argument("--physics-feature-index", type=int, default=1)
     return parser.parse_args()
 
 
@@ -68,6 +72,10 @@ def main() -> None:
     state_key = "ema" if args.use_ema and "ema" in checkpoint else "model"
     model.load_state_dict(checkpoint[state_key], strict=True)
     model.eval()
+    physics_operator = None
+    if args.physics_guidance_scale > 0.0:
+        image_size = int(config.get("data", {}).get("image_size", 256))
+        physics_operator = RayOperator(image_shape=(image_size, image_size)).to(device)
     output_dir = ensure_dir(args.output_dir or Path(config.get("run_dir", ROOT / "runs" / "diffusion_debug")) / "samples")
     rows = []
     with torch.no_grad():
@@ -81,6 +89,10 @@ def main() -> None:
                 batch["x_matrix"],
                 steps=args.steps or int(config.get("sample", {}).get("steps", 50)),
                 eta=args.eta,
+                physics_operator=physics_operator,
+                physics_guidance_scale=args.physics_guidance_scale,
+                physics_guidance_start_fraction=args.physics_guidance_start_fraction,
+                physics_feature_index=args.physics_feature_index,
             )
             pred_np = pred[0, 0].detach().cpu().numpy().astype(np.float32)
             target_np = batch["target"][0, 0].detach().cpu().numpy().astype(np.float32)
@@ -96,6 +108,7 @@ def main() -> None:
                     "preview_png": str(png_path),
                     "checkpoint": str(args.checkpoint),
                     "state_key": state_key,
+                    "physics_guidance_scale": args.physics_guidance_scale,
                 }
             )
     if rows:

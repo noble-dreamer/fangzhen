@@ -225,8 +225,6 @@ $$
 
 这比只在训练损失里面加 `ray consistency` 更强。
 
-
-
 ## 4.1物理前向模型可以比 RayOperator 更强
 
 它很快、可微、稳定。
@@ -245,7 +243,6 @@ $o_{tx,rx}
 
 这会损失很多信息。
 
-
 不要一开始就上全波 PINN。建议分三层：
 
 ### Level 1：现有 RayOperator
@@ -260,19 +257,10 @@ of=Afyo_f=A_fy**o**f=**A**fy
 
 ### Level 3：Born/Rytov wave operator
 
-
-
 # 5 用更现代的 diffusion 训练形式：EDM / flow matching / consistency model
 
 主要考虑EDM
 
-
-
 6.自条件 Self-conditioning：低成本高收益，这种训练的小trick加上
-
-
-
-
-
 
 <pre node="[object Object]"><div class="sc-cgHfjM rztuA code-block"></div></pre>

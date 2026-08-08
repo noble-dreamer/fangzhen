@@ -58,6 +58,10 @@ def build_model(config: dict) -> GaussianDiffusion:
         attention_resolutions=tuple(model_cfg.get("attention_resolutions", (32,))),
         cond_dim=int(model_cfg.get("cond_dim", 256)),
         x_hidden_channels=int(model_cfg.get("x_hidden_channels", 64)),
+        x_token_dim=int(model_cfg.get("x_token_dim", model_cfg.get("cond_dim", 256))),
+        cross_attention_resolutions=tuple(model_cfg.get("cross_attention_resolutions", ())),
+        cross_attention_heads=int(model_cfg.get("cross_attention_heads", 4)),
+        self_condition_prob=float(model_cfg.get("self_condition_prob", 0.5)),
         dropout=float(model_cfg.get("dropout", 0.05)),
         timesteps=int(diffusion_cfg.get("timesteps", 1000)),
         beta_schedule=str(diffusion_cfg.get("beta_schedule", "cosine")),
@@ -195,7 +199,11 @@ def main() -> None:
                 phys_lambda = physics_weight(loss_cfg, global_step)
                 phys = x0_pred.new_tensor(0.0)
                 if ray_operator is not None and phys_lambda > 0.0:
-                    phys = ray_operator.consistency_loss(x0_pred.clamp(0.0, 1.0), batch["x_matrix"])
+                    phys = ray_operator.consistency_loss(
+                        x0_pred.clamp(0.0, 1.0),
+                        batch["x_matrix"],
+                        feature_index=int(loss_cfg.get("phys_feature_index", 1)),
+                    )
                 loss = losses["loss_diffusion"] + prior["loss_prior_total"] + phys_lambda * phys
             scaler.scale(loss).backward()
             if grad_clip > 0.0:

@@ -78,6 +78,79 @@ class AttentionBlock(nn.Module):
         return x + h
 
 
+class CrossAttentionBlock(nn.Module):
+    def __init__(
+        self,
+        channels: int,
+        token_dim: int,
+        *,
+        num_heads: int = 4,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.GroupNorm(default_groups(channels), channels)
+        self.token_norm = nn.LayerNorm(token_dim)
+        self.query_proj = nn.Linear(channels, token_dim)
+        self.attn = nn.MultiheadAttention(token_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
+        self.out_proj = nn.Linear(token_dim, channels)
+
+    def forward(self, x: torch.Tensor, tokens: torch.Tensor | None) -> torch.Tensor:
+        if tokens is None:
+            return x
+        batch, channels, height, width = x.shape
+        query = self.norm(x).reshape(batch, channels, height * width).transpose(1, 2)
+        query = self.query_proj(query)
+        key_value = self.token_norm(tokens)
+        attended, _ = self.attn(query, key_value, key_value, need_weights=False)
+        attended = self.out_proj(attended).transpose(1, 2).reshape(batch, channels, height, width)
+        return x + attended
+
+
+class PicEncoder(nn.Module):
+    """ControlNet/T2I-Adapter style coarse-map encoder with zero-conv outputs."""
+
+    def __init__(
+        self,
+        *,
+        pic_channels: int,
+        base_channels: int,
+        channel_mult: tuple[int, ...],
+    ) -> None:
+        super().__init__()
+        self.blocks = nn.ModuleList()
+        in_channels = int(pic_channels)
+        for level, mult in enumerate(channel_mult):
+            out_channels = base_channels * int(mult)
+            stride = 1 if level == 0 else 2
+            self.blocks.append(
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1),
+                    nn.GroupNorm(default_groups(out_channels), out_channels),
+                    nn.SiLU(),
+                    nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+                    nn.GroupNorm(default_groups(out_channels), out_channels),
+                    nn.SiLU(),
+                )
+            )
+            in_channels = out_channels
+        self.zero_convs = nn.ModuleList(
+            [nn.Conv2d(base_channels * int(mult), base_channels * int(mult), kernel_size=1) for mult in channel_mult]
+        )
+        for conv in self.zero_convs:
+            nn.init.zeros_(conv.weight)
+            nn.init.zeros_(conv.bias)
+
+    def forward(self, pic: torch.Tensor | None) -> list[torch.Tensor] | None:
+        if pic is None:
+            return None
+        h = pic
+        outputs: list[torch.Tensor] = []
+        for block, zero_conv in zip(self.blocks, self.zero_convs):
+            h = block(h)
+            outputs.append(zero_conv(h))
+        return outputs
+
+
 class Downsample(nn.Module):
     def __init__(self, channels: int) -> None:
         super().__init__()
@@ -112,6 +185,10 @@ class ConditionalUNet(nn.Module):
         time_dim: int = 256,
         dropout: float = 0.05,
         use_time: bool = True,
+        cross_attention_resolutions: tuple[int, ...] = (),
+        x_token_dim: int = 256,
+        cross_attention_heads: int = 4,
+        pic_condition_channels: int = 0,
     ) -> None:
         super().__init__()
         self.image_size = int(image_size)
@@ -124,8 +201,14 @@ class ConditionalUNet(nn.Module):
         )
         self.null_time = nn.Parameter(torch.zeros(cond_dim))
         self.input_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
+        self.pic_encoder = PicEncoder(
+            pic_channels=int(pic_condition_channels),
+            base_channels=base_channels,
+            channel_mult=tuple(channel_mult),
+        )
         self.down_blocks = nn.ModuleList()
         self.downsamples = nn.ModuleList()
+        self.down_adapter_indices: list[int] = []
         self.skip_channels: list[int] = []
         channels = base_channels
         resolution = self.image_size
@@ -138,7 +221,17 @@ class ConditionalUNet(nn.Module):
                 self.skip_channels.append(channels)
                 if resolution in attention_resolutions:
                     blocks.append(AttentionBlock(channels))
+                if resolution in cross_attention_resolutions:
+                    blocks.append(
+                        CrossAttentionBlock(
+                            channels,
+                            x_token_dim,
+                            num_heads=cross_attention_heads,
+                            dropout=dropout,
+                        )
+                    )
             self.down_blocks.append(blocks)
+            self.down_adapter_indices.append(level)
             if level != len(channel_mult) - 1:
                 self.downsamples.append(Downsample(channels))
                 self.skip_channels.append(channels)
@@ -148,10 +241,12 @@ class ConditionalUNet(nn.Module):
 
         self.mid1 = ResBlock(channels, channels, cond_dim, dropout=dropout)
         self.mid_attn = AttentionBlock(channels)
+        self.mid_cross_attn = CrossAttentionBlock(channels, x_token_dim, num_heads=cross_attention_heads, dropout=dropout)
         self.mid2 = ResBlock(channels, channels, cond_dim, dropout=dropout)
 
         self.up_blocks = nn.ModuleList()
         self.upsamples = nn.ModuleList()
+        self.up_adapter_indices: list[int] = []
         for level, mult in reversed(list(enumerate(channel_mult))):
             out_ch = base_channels * int(mult)
             blocks = nn.ModuleList()
@@ -162,7 +257,17 @@ class ConditionalUNet(nn.Module):
                 channels = out_ch
                 if resolution in attention_resolutions:
                     blocks.append(AttentionBlock(channels))
+                if resolution in cross_attention_resolutions:
+                    blocks.append(
+                        CrossAttentionBlock(
+                            channels,
+                            x_token_dim,
+                            num_heads=cross_attention_heads,
+                            dropout=dropout,
+                        )
+                    )
             self.up_blocks.append(blocks)
+            self.up_adapter_indices.append(level)
             if level != 0:
                 self.upsamples.append(Upsample(channels))
                 resolution *= 2
@@ -177,6 +282,9 @@ class ConditionalUNet(nn.Module):
         x: torch.Tensor,
         timesteps: torch.Tensor | None,
         data_embedding: torch.Tensor,
+        *,
+        x_tokens: torch.Tensor | None = None,
+        pic_condition: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.use_time:
             if timesteps is None:
@@ -184,13 +292,24 @@ class ConditionalUNet(nn.Module):
             cond = data_embedding + self.time_embed(timesteps)
         else:
             cond = data_embedding + self.null_time[None, :]
+        if pic_condition is None:
+            raise RuntimeError("pic_condition is required by the PicAdapter path")
+        if x_tokens is None:
+            raise RuntimeError("x_tokens are required by the cross-attention path")
+        pic_features = self.pic_encoder(pic_condition)
         h = self.input_conv(x)
         skips: list[torch.Tensor] = []
-        for blocks, downsample in zip(self.down_blocks, self.downsamples):
+        for blocks, downsample, adapter_index in zip(self.down_blocks, self.downsamples, self.down_adapter_indices):
             for block in blocks:
                 if isinstance(block, ResBlock):
                     h = block(h, cond)
+                    adapter = pic_features[adapter_index]
+                    if adapter.shape[-2:] != h.shape[-2:]:
+                        adapter = F.interpolate(adapter, size=h.shape[-2:], mode="bilinear", align_corners=False)
+                    h = h + adapter
                     skips.append(h)
+                elif isinstance(block, CrossAttentionBlock):
+                    h = block(h, x_tokens)
                 else:
                     h = block(h)
             before_down = h
@@ -199,8 +318,9 @@ class ConditionalUNet(nn.Module):
                 skips.append(before_down)
         h = self.mid1(h, cond)
         h = self.mid_attn(h)
+        h = self.mid_cross_attn(h, x_tokens)
         h = self.mid2(h, cond)
-        for blocks, upsample in zip(self.up_blocks, self.upsamples):
+        for blocks, upsample, adapter_index in zip(self.up_blocks, self.upsamples, self.up_adapter_indices):
             for block in blocks:
                 if isinstance(block, ResBlock):
                     skip = skips.pop()
@@ -208,6 +328,12 @@ class ConditionalUNet(nn.Module):
                         skip = F.interpolate(skip, size=h.shape[-2:], mode="nearest")
                     h = torch.cat([h, skip], dim=1)
                     h = block(h, cond)
+                    adapter = pic_features[adapter_index]
+                    if adapter.shape[-2:] != h.shape[-2:]:
+                        adapter = F.interpolate(adapter, size=h.shape[-2:], mode="bilinear", align_corners=False)
+                    h = h + adapter
+                elif isinstance(block, CrossAttentionBlock):
+                    h = block(h, x_tokens)
                 else:
                     h = block(h)
             h = upsample(h)

@@ -57,6 +57,9 @@ def build_model(config: dict) -> ConditionalRegressor:
         attention_resolutions=tuple(model_cfg.get("attention_resolutions", (32,))),
         cond_dim=int(model_cfg.get("cond_dim", 256)),
         x_hidden_channels=int(model_cfg.get("x_hidden_channels", 64)),
+        x_token_dim=int(model_cfg.get("x_token_dim", model_cfg.get("cond_dim", 256))),
+        cross_attention_resolutions=tuple(model_cfg.get("cross_attention_resolutions", ())),
+        cross_attention_heads=int(model_cfg.get("cross_attention_heads", 4)),
         dropout=float(model_cfg.get("dropout", 0.05)),
     )
 
@@ -182,7 +185,11 @@ def main() -> None:
                 )
                 phys = pred.new_tensor(0.0)
                 if ray_operator is not None:
-                    phys = ray_operator.consistency_loss(pred, batch["x_matrix"])
+                    phys = ray_operator.consistency_loss(
+                        pred,
+                        batch["x_matrix"],
+                        feature_index=int(loss_cfg.get("phys_feature_index", 1)),
+                    )
                 loss = (
                     float(loss_cfg.get("lambda_l1", 1.0)) * l1
                     + float(loss_cfg.get("lambda_ssim", 0.2)) * loss_ssim

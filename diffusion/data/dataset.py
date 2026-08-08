@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, Subset, random_split
 
 from .transforms import DEFAULT_PIC_CHANNELS, RandomCircularRoll, normalize_x_matrix, resize_label_nearest
 
@@ -47,6 +47,65 @@ def parse_sample_id_ranges(values: list[str] | str | None) -> list[str] | None:
             else:
                 output.append(token)
     return list(dict.fromkeys(output))
+
+
+def read_sample_ids_file(value: str | Path, *, config: dict[str, Any]) -> list[str]:
+    """Read an auditable one-ID-per-line split file, relative to the config when needed."""
+
+    path = Path(value)
+    if not path.is_absolute():
+        config_path = config.get("_config_path")
+        if config_path:
+            config_relative = Path(config_path).parent / path
+            if config_relative.exists():
+                path = config_relative
+    if not path.exists():
+        raise FileNotFoundError(f"sample_ids_file does not exist: {path}")
+
+    values = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if line:
+            values.append(line)
+    sample_ids = parse_sample_id_ranges(values)
+    if not sample_ids:
+        raise RuntimeError(f"sample_ids_file contains no sample IDs: {path}")
+    return sample_ids
+
+
+def dataset_sample_ids(dataset: Dataset) -> list[str]:
+    """Return the source sample IDs for a Dataset or a random_split Subset."""
+
+    if isinstance(dataset, UltrasonicDiffusionDataset):
+        return [sample.sample_id for sample in dataset.samples]
+    if isinstance(dataset, Subset) and isinstance(dataset.dataset, UltrasonicDiffusionDataset):
+        return [dataset.dataset.samples[int(index)].sample_id for index in dataset.indices]
+    raise TypeError(f"Cannot extract sample IDs from dataset type: {type(dataset).__name__}")
+
+
+def _sample_ids_from_config(
+    config: dict[str, Any],
+    *,
+    split: str,
+) -> list[str] | str | None:
+    data_cfg = config.get("data", {})
+    split_cfg = data_cfg.get(split, {})
+    if not isinstance(split_cfg, dict):
+        raise RuntimeError(f"data.{split} must be a mapping")
+    sample_ids_file = split_cfg.get("sample_ids_file")
+    sample_ids = split_cfg.get("sample_ids", data_cfg.get("sample_ids"))
+    if sample_ids_file is not None:
+        if "sample_ids" in split_cfg:
+            raise RuntimeError(f"data.{split} must set only one of sample_ids or sample_ids_file")
+        return read_sample_ids_file(sample_ids_file, config=config)
+    return sample_ids
+
+
+def _has_explicit_sample_ids(data_cfg: dict[str, Any], split: str) -> bool:
+    split_cfg = data_cfg.get(split, {})
+    return isinstance(split_cfg, dict) and (
+        split_cfg.get("sample_ids") is not None or split_cfg.get("sample_ids_file") is not None
+    )
 
 
 def infer_sample_id(path: Path) -> str:
@@ -131,7 +190,7 @@ class UltrasonicDiffusionDataset(Dataset[dict[str, Any]]):
 
     def __len__(self) -> int:
         return len(self.samples)
-# 从 coarse npz 读取 `pic` 或 `pic_raw`，按 `pic_channels` 选择通道。
+
     def _load_pic(self, path: Path) -> tuple[np.ndarray, list[str], dict[str, Any]]:
         data = np.load(path, allow_pickle=False)
         key = "pic_raw" if self.use_raw_pic and "pic_raw" in data.files else "pic"
@@ -157,20 +216,60 @@ class UltrasonicDiffusionDataset(Dataset[dict[str, Any]]):
             except Exception:
                 metadata = {}
         return pic, [names[index] for index in indices], metadata
-    # 读取 `x`，并调用 `normalize_x_matrix()` 做 per-sample robust z-score。
-    def _load_x(self, path: Path) -> tuple[np.ndarray, list[str]]:
-        data = np.load(path, allow_pickle=False)
-        if "x" not in data.files:
-            raise RuntimeError(f"{path} missing x array")
-        x = np.asarray(data["x"], dtype=np.float32)
-        names = _read_npz_strings(data, "feature_names")
-        return normalize_x_matrix(x, self.x_normalization), names
+
+    def _load_x(
+        self,
+        path: Path,
+    ) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray, np.ndarray]:
+        with np.load(path, allow_pickle=False) as data:
+            required = ("x", "frequency_hz", "tx_indices", "rx_indices")
+            missing = [key for key in required if key not in data.files]
+            if missing:
+                raise RuntimeError(f"{path} missing physical-coordinate arrays: {missing}")
+            x = np.asarray(data["x"], dtype=np.float32)
+            names = _read_npz_strings(data, "feature_names")
+            frequency_hz = np.asarray(data["frequency_hz"], dtype=np.float32)
+            tx_indices = np.asarray(data["tx_indices"], dtype=np.int64)
+            rx_indices = np.asarray(data["rx_indices"], dtype=np.int64)
+
+        if x.ndim != 4:
+            raise RuntimeError(f"{path} x must be (C,F,TX,RX), got {x.shape}")
+        expected_shapes = {
+            "frequency_hz": (x.shape[1],),
+            "tx_indices": (x.shape[2],),
+            "rx_indices": (x.shape[3],),
+        }
+        coordinate_arrays = {
+            "frequency_hz": frequency_hz,
+            "tx_indices": tx_indices,
+            "rx_indices": rx_indices,
+        }
+        for name, expected_shape in expected_shapes.items():
+            if coordinate_arrays[name].shape != expected_shape:
+                raise RuntimeError(
+                    f"{path} {name} must have shape {expected_shape}, "
+                    f"got {coordinate_arrays[name].shape}"
+                )
+        if not np.all(np.isfinite(frequency_hz)) or np.any(frequency_hz <= 0.0):
+            raise RuntimeError(f"{path} frequency_hz must contain finite positive values")
+        if np.unique(frequency_hz).size != frequency_hz.size:
+            raise RuntimeError(f"{path} frequency_hz must not contain duplicates")
+        if np.unique(tx_indices).size != tx_indices.size or np.unique(rx_indices).size != rx_indices.size:
+            raise RuntimeError(f"{path} tx_indices and rx_indices must not contain duplicates")
+
+        return (
+            normalize_x_matrix(x, self.x_normalization),
+            names,
+            frequency_hz,
+            tx_indices,
+            rx_indices,
+        )
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         sample = self.samples[index]
         rng = np.random.default_rng(self.seed + index)
         pic, pic_channel_names, metadata = self._load_pic(sample.coarse_path)
-        x_matrix, x_feature_names = self._load_x(sample.x_path)
+        x_matrix, x_feature_names, frequency_hz, tx_indices, rx_indices = self._load_x(sample.x_path)
         label = np.asarray(np.load(sample.label_path), dtype=np.float32)
         label = resize_label_nearest(label, self.image_size)
         if tuple(pic.shape[-2:]) != self.image_size:
@@ -198,6 +297,9 @@ class UltrasonicDiffusionDataset(Dataset[dict[str, Any]]):
             "sample_id": sample.sample_id,
             "pic": torch.from_numpy(pic),
             "x_matrix": torch.from_numpy(x_matrix),
+            "frequency_hz": torch.from_numpy(np.ascontiguousarray(frequency_hz)),
+            "tx_indices": torch.from_numpy(np.ascontiguousarray(tx_indices)),
+            "rx_indices": torch.from_numpy(np.ascontiguousarray(rx_indices)),
             "target": torch.from_numpy(label),
             "coarse_path": str(sample.coarse_path),
             "x_path": str(sample.x_path),
@@ -211,7 +313,7 @@ class UltrasonicDiffusionDataset(Dataset[dict[str, Any]]):
 def build_dataset_from_config(config: dict[str, Any], *, split: str = "train") -> UltrasonicDiffusionDataset:
     data_cfg = config.get("data", {})
     split_cfg = data_cfg.get(split, {})
-    sample_ids = split_cfg.get("sample_ids", data_cfg.get("sample_ids"))
+    sample_ids = _sample_ids_from_config(config, split=split)
     return UltrasonicDiffusionDataset(
         coarse_dir=split_cfg.get("coarse_dir", data_cfg["coarse_dir"]),
         x_dir=split_cfg.get("x_dir", data_cfg["x_dir"]),
@@ -233,8 +335,13 @@ def build_dataloaders(config: dict[str, Any]) -> tuple[DataLoader, DataLoader | 
     data_cfg = config.get("data", {})
     loader_cfg = config.get("loader", {})
     val_dataset: Dataset | None
-    if "val" in data_cfg and data_cfg["val"].get("sample_ids") is not None:
+    explicit_val = _has_explicit_sample_ids(data_cfg, "val")
+    if explicit_val:
         val_dataset = build_dataset_from_config(config, split="val")
+        overlap = sorted(set(dataset_sample_ids(train_dataset)) & set(dataset_sample_ids(val_dataset)))
+        if overlap:
+            preview = ", ".join(overlap[:8])
+            raise RuntimeError(f"Explicit train/val sample IDs overlap: {preview}")
     else:
         val_fraction = float(data_cfg.get("val_fraction", 0.0))
         if val_fraction > 0.0 and len(train_dataset) > 1:

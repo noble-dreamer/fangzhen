@@ -50,6 +50,16 @@ class DefectSizeClass:
     lobe_count_range: tuple[int, int]
 
 
+# 缺陷复杂度主要从这里调：
+# - min_defects/max_defects 控制单个样本中的缺陷数量。
+# - size_classes 与各类 size pattern 控制小/中/大缺陷混合比例。
+# - aspect_ratio_range 控制椭圆长宽比，范围越宽，越容易出现轴向/周向细长腐蚀。
+# - irregular_lobes、convex_lobes_range 和 lobe_*_fraction 控制边缘不规则凸起/局部坑群。
+# - clearance_mm 控制缺陷之间最小间距；减小它可生成更接近或部分叠加的复杂多缺陷。
+# 只改变这些参数，COMSOL 厚度场和 label 仍会保持一致，因为它们都读取同一份 metadata。
+# 如果要新增“沟槽、环向腐蚀带、裂纹状缺陷、非高斯形状”等新类型，不能只改这里；
+# 还必须同步扩展 simple_shell_common.py 的 thickness_loss_expression/defect_window_expr
+# 以及 defect_label_common.py 的 _component_loss_mm/build_depth_map，避免仿真缺陷和训练 label 不一致。
 @dataclass(frozen=True)
 class DefectSamplingConfig:
     min_defects: int = 1
@@ -61,16 +71,16 @@ class DefectSamplingConfig:
     z_margin_mm: float = 260.0
     clearance_mm: float = 50.0
     irregular_lobes: bool = True
-    convex_lobes_range: tuple[int, int] = (0, 2)
-    lobe_radius_fraction: tuple[float, float] = (0.30, 0.55)
+    convex_lobes_range: tuple[int, int] = (1, 4)
+    lobe_radius_fraction: tuple[float, float] = (0.20, 0.45)
     lobe_offset_fraction: tuple[float, float] = (0.45, 0.80)
-    lobe_depth_fraction: tuple[float, float] = (0.06, 0.16)
+    lobe_depth_fraction: tuple[float, float] = (0.10, 0.25)
     size_mixture: bool = True
     defect_count_weights: tuple[float, ...] = (0.30, 0.45, 0.25)
     size_classes: tuple[DefectSizeClass, ...] = (
-        DefectSizeClass('small', (50.0, 95.0), (0.8, 2.6), (0, 0)),
-        DefectSizeClass('medium', (95.0, 170.0), (1.0, 3.4), (0, 1)),
-        DefectSizeClass('large', (170.0, 240.0), (1.5, 4.2), (0, 1)),
+        DefectSizeClass('small', (50.0, 95.0), (0.8, 2.6), (0, 1)),
+        DefectSizeClass('medium', (95.0, 170.0), (1.0, 3.4), (1, 2)),
+        DefectSizeClass('large', (170.0, 240.0), (1.5, 4.2), (1, 3)),
     )
     single_size_weights: tuple[tuple[str, float], ...] = (
         ('large', 0.45),

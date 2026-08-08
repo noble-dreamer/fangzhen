@@ -21,6 +21,9 @@ class ConditionalRegressor(nn.Module):
         attention_resolutions: tuple[int, ...] = (32,),
         cond_dim: int = 256,
         x_hidden_channels: int = 64,
+        x_token_dim: int | None = None,
+        cross_attention_resolutions: tuple[int, ...] = (),
+        cross_attention_heads: int = 4,
         dropout: float = 0.05,
     ) -> None:
         super().__init__()
@@ -30,6 +33,7 @@ class ConditionalRegressor(nn.Module):
             embedding_dim=cond_dim,
             hidden_channels=x_hidden_channels,
             dropout=dropout,
+            token_dim=x_token_dim or cond_dim,
         )
         self.unet = ConditionalUNet(
             in_channels=pic_channels,
@@ -42,9 +46,13 @@ class ConditionalRegressor(nn.Module):
             cond_dim=cond_dim,
             dropout=dropout,
             use_time=False,
+            cross_attention_resolutions=tuple(cross_attention_resolutions),
+            x_token_dim=x_token_dim or cond_dim,
+            cross_attention_heads=cross_attention_heads,
+            pic_condition_channels=pic_channels,
         )
 
     def forward(self, pic: torch.Tensor, x_matrix: torch.Tensor) -> torch.Tensor:
-        embedding = self.x_encoder(x_matrix)
-        logits = self.unet(pic, None, embedding)
+        embedding, tokens = self.x_encoder(x_matrix)
+        logits = self.unet(pic, None, embedding, x_tokens=tokens, pic_condition=pic)
         return torch.sigmoid(logits)

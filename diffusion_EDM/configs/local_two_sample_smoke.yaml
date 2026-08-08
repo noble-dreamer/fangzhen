@@ -1,6 +1,6 @@
-seed: 20260702
+seed: 20260708
 deterministic: false
-run_dir: simple/diffusion/runs/local_two_sample_smoke
+run_dir: simple/diffusion_EDM/runs/local_sfaf_fusion_smoke
 
 data:
   coarse_dir: simple/get_pic/output_dataset/coarse_maps
@@ -39,12 +39,29 @@ model:
   attention_resolutions: []
   cond_dim: 64
   x_hidden_channels: 16
+  x_token_dim: 64
+  spatial_frequency_fusion:
+    resolutions: [128]
+    heads: 4
+    filter_kernel_size: 5
+    physical_position:
+      tx_count: 16
+      rx_count: 16
+      pipe_length_mm: 1000.0
+      mid_radius_mm: 155.0
+      tx_z_mm: 100.0
+      rx_z_mm: 900.0
+      frequency_reference_hz: 100000.0
   dropout: 0.0
+  self_condition_prob: 0.5
 
-diffusion:
-  timesteps: 10
-  beta_schedule: cosine
-  prediction_type: v_prediction
+edm:
+  sigma_data: 0.5
+  sigma_min: 0.002
+  sigma_max: 5.0
+  p_mean: -1.2
+  p_std: 1.2
+  rho: 7.0
 
 train:
   epochs: 1
@@ -62,14 +79,32 @@ train:
   val_every_steps: 10
 
 loss:
-  lambda_l1: 1.0
-  lambda_ssim: 0.1
   lambda_x0_l1: 0.05
-  lambda_tv: 0.0001
+  lambda_tv: 0.001
   lambda_range: 0.01
   lambda_coverage_l1: 0.0
+  lambda_spectral: 0.01
   lambda_phys_v1: 0.0
+  phys_feature_index: 1
+  phys_start_step: 20000
+  phys_warmup_steps: 60000
 
 sample:
   steps: 5
-  eta: 0.0
+  sigma_min: 0.002
+  sigma_max: 5.0
+  rho: 7.0
+  s_churn: 0.0
+  s_tmin: 0.0
+  s_tmax: .inf
+  s_noise: 1.0
+  physics_guidance_scale: 0.0
+  physics_guidance_start_fraction: 0.5
+  uncertainty:
+    num_samples: 4
+    sample_seed: 20260712
+    lower_quantile: 0.05
+    upper_quantile: 0.95
+    defect_threshold: 0.1
+    consensus_probability_threshold: 0.5
+    save_all_samples: false

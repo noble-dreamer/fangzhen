@@ -1,5 +1,5 @@
 \documentclass[10pt,landscape]{article}
-\usepackage[paperwidth=420mm,paperheight=297mm,margin=9mm]{geometry}
+\usepackage[paperwidth=440mm,paperheight=300mm,margin=8mm]{geometry}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{tikz}
@@ -8,11 +8,11 @@
 \usepackage{xcolor}
 \usepackage{amsmath}
 \usepackage{hyperref}
-\usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.multipart}
+\usetikzlibrary{arrows.meta,positioning,fit,calc}
 
 \pagestyle{empty}
 \setlength{\parindent}{0pt}
-\renewcommand{\arraystretch}{1.15}
+\renewcommand{\arraystretch}{1.13}
 
 \definecolor{dataBlue}{RGB}{66,133,244}
 \definecolor{condGreen}{RGB}{52,168,83}
@@ -22,14 +22,15 @@
 \definecolor{grayBox}{RGB}{245,247,250}
 
 \tikzset{
-  tensor/.style={draw, rounded corners=2pt, very thick, fill=dataBlue!10, align=center, minimum height=9mm, font=\small},
-  cond/.style={draw, rounded corners=2pt, very thick, fill=condGreen!10, align=center, minimum height=9mm, font=\small},
-  op/.style={draw, rounded corners=2pt, very thick, fill=grayBox, align=center, minimum height=9mm, font=\small},
-  unet/.style={draw, rounded corners=2pt, very thick, fill=diffOrange!12, align=center, minimum height=9mm, font=\small},
-  block/.style={draw, rounded corners=2pt, very thick, fill=blockPurple!10, align=center, minimum height=9mm, font=\small},
-  loss/.style={draw, rounded corners=2pt, very thick, fill=lossRed!8, align=center, minimum height=9mm, font=\small},
+  tensor/.style={draw, rounded corners=2pt, very thick, fill=dataBlue!10, align=center, minimum height=9mm, font=\footnotesize},
+  cond/.style={draw, rounded corners=2pt, very thick, fill=condGreen!10, align=center, minimum height=9mm, font=\footnotesize},
+  op/.style={draw, rounded corners=2pt, very thick, fill=grayBox, align=center, minimum height=9mm, font=\footnotesize},
+  unet/.style={draw, rounded corners=2pt, very thick, fill=diffOrange!12, align=left, minimum height=9mm, font=\scriptsize},
+  block/.style={draw, rounded corners=2pt, very thick, fill=blockPurple!10, align=center, minimum height=9mm, font=\footnotesize},
+  loss/.style={draw, rounded corners=2pt, very thick, fill=lossRed!8, align=center, minimum height=9mm, font=\footnotesize},
   arrow/.style={-{Latex[length=3mm]}, very thick},
   skip/.style={-{Latex[length=2.5mm]}, thick, dashed, color=blockPurple},
+  bus/.style={draw, rounded corners=2pt, thick, fill=condGreen!6, align=center, font=\scriptsize},
   note/.style={align=left, font=\footnotesize}
 }
 
@@ -39,129 +40,151 @@
 \begin{document}
 
 \begin{center}
-{\Large Conditional Diffusion Network for Ultrasonic Defect Map Inversion}\\[1mm]
-{\normalsize Main drawing follows \cfg: image size 256, pic channels 8, x channels 7, frequencies 15, base channels 48.}\\
-{\small Tensor order: image tensors use \shape{B,C,H,W}; x-matrix uses \shape{B,C,F,TX,RX}.}
+{\Large Current Conditional Diffusion Network for Ultrasonic Defect Map Inversion}\\[1mm]
+{\normalsize Follows \cfg: image size 256, pic channels 8, x channels 7, frequencies 15, base channels 48.}\\
+{\small Tensor order: image tensors use \shape{B,C,H,W}; x-matrix uses \shape{B,C,F,TX,RX}; x tokens use \shape{B,N,D}.}
 \end{center}
 
 \vspace{1mm}
 
 \begin{tikzpicture}[x=1mm,y=1mm]
-  \node[note, text width=92mm] at (26,40) {
-    \textbf{Training view.} Diffusion variable is the continuous defect-depth label $y$, not the coarse map.\\
-    The coarse map gives spatial prior; x\_matrix preserves tx-rx-frequency information.
+  \node[note, text width=125mm] at (67,58) {
+    \textbf{Training view.} The diffusion variable is the continuous target label $y_0$.
+    The network sees the noisy label $y_t$, the previous clean prediction used for self-conditioning,
+    the 8-channel coarse-map condition, and the full frequency x-matrix.
   };
-  \node[note, text width=112mm] at (210,42) {
-    \textbf{Sampling view.} Remove $y_0$ and loss nodes. Start from Gaussian noise \shape{B,1,256,256}; run DDIM/DDPM denoising with the same pic and x\_matrix conditions.
+  \node[note, text width=130mm] at (295,58) {
+    \textbf{Sampling view.} Start from Gaussian noise \shape{B,1,256,256}.
+    At each DDPM/DDIM step, feed the previous $\hat{x}_0$ as self-condition.
+    Optional physics guidance adjusts $\hat{x}_0$ through the frequency-aware RayOperator.
   };
 
-  % Lane labels
-  \node[note, text width=28mm] at (10,12) {\textbf{Image condition}};
-  \node[note, text width=28mm] at (10,-28) {\textbf{x condition}};
-  \node[note, text width=28mm] at (10,-68) {\textbf{Diffusion target}};
-
-  % Image-condition lane
-  \node[tensor, minimum width=38mm] (pic) at (45,0) {V1 coarse map\\\shape{B,8,256,256}};
-  \node[op, minimum width=36mm] (concat) at (100,0) {concat channels\\$[y_t,pic]$};
-  \node[tensor, minimum width=40mm] (unetin) at (155,0) {U-Net image input\\\shape{B,9,256,256}};
-
-  % x-condition lane
-  \node[tensor, minimum width=45mm] (xmat) at (45,-40) {frequency condition\\x\_matrix\\\shape{B,7,15,16,16}};
-  \node[cond, minimum width=55mm] (xenc) at (110,-40) {XMatrixEncoder\\reshape: \shape{B,105,16,16}\\CNN + global pool + MLP};
-  \node[cond, minimum width=40mm] (xemb) at (175,-40) {data embedding\\$e_x$\\\shape{B,256}};
-  \node[cond, minimum width=40mm] (temb) at (175,-75) {timestep embedding\\$e_t$\\\shape{B,256}};
-  \node[cond, minimum width=44mm] (film) at (235,-55) {FiLM condition\\$c=e_x+e_t$\\\shape{B,256}};
-
-  % Diffusion-target lane
-  \node[tensor, minimum width=38mm] (y0) at (45,-95) {target label $y_0$\\\shape{B,1,256,256}};
-  \node[op, minimum width=38mm] (noise) at (100,-95) {sample $t,\epsilon$\\$q(y_t|y_0)$};
-  \node[tensor, minimum width=38mm] (yt) at (155,-95) {noisy target $y_t$\\\shape{B,1,256,256}};
-
-  % Main model and output stack
-  \node[unet, minimum width=86mm, minimum height=40mm] (unetbox) at (265,0) {
-    Conditional U-Net\\
-    Down: 256$\rightarrow$128$\rightarrow$64$\rightarrow$32\\
-    Mid: ResBlock + Attention + ResBlock\\
-    Up: 32$\rightarrow$64$\rightarrow$128$\rightarrow$256\\
-    FiLM injected into every ResBlock
+  \node[note] at (18,34) {\textbf{pic path}};
+  \node[tensor, minimum width=36mm] (pic) at (45,34) {coarse pic\\\shape{B,8,256,256}};
+  \node[cond, minimum width=42mm] (picenc) at (105,34) {PicEncoder\\4 scale CNN};
+  \node[cond, text width=53mm, minimum height=30mm] (pfeat) at (173,34) {
+    PicAdapter features\\
+    $p_{256}$ \shape{B,48,256,256}\\
+    $p_{128}$ \shape{B,96,128,128}\\
+    $p_{64}$ \shape{B,192,64,64}\\
+    $p_{32}$ \shape{B,192,32,32}
   };
-  \node[tensor, minimum width=38mm] (vpred) at (335,0) {predicted $v$\\or $\epsilon$\\\shape{B,1,256,256}};
-  \node[op, minimum width=42mm] (x0pred) at (335,-35) {recover $x_0$\\from $y_t,t,v$\\\shape{B,1,256,256}};
-  \node[tensor, minimum width=38mm] (out) at (335,-70) {final defect map\\clamp to [0,1]\\\shape{B,1,256,256}};
-  \node[loss, minimum width=52mm] (losses) at (335,-108) {training losses\\MSE(v), L1($x_0,y$), TV, range\\optional V1 ray consistency};
 
-  % Straight lane arrows
-  \draw[arrow] (pic) -- (concat);
-  \draw[arrow] (concat) -- (unetin);
-  \draw[arrow] (unetin) -- (unetbox);
+  \node[note] at (18,-27) {\textbf{x path}};
+  \node[tensor, minimum width=40mm] (xmat) at (45,-27) {x\_matrix\\\shape{B,7,15,16,16}};
+  \node[cond, minimum width=48mm] (xenc) at (110,-27) {XMatrixEncoder\\reshape \shape{B,105,16,16}};
+  \node[cond, minimum width=42mm] (emb) at (176,-10) {global embedding\\$e_x$ \shape{B,256}};
+  \node[cond, minimum width=42mm] (tok) at (176,-45) {TX-RX tokens\\$T_x$ \shape{B,256,256}};
+  \node[bus, minimum width=33mm] (film) at (228,-10) {FiLM bus\\$e_x+e_t$};
+  \node[bus, minimum width=39mm] (cross) at (228,-45) {cross-attn bus\\32 px + middle};
+
+  \node[note] at (18,-94) {\textbf{diffusion path}};
+  \node[tensor, minimum width=34mm] (y0) at (45,-94) {target $y_0$\\\shape{B,1,256,256}};
+  \node[op, minimum width=34mm] (qsample) at (100,-94) {$q(y_t|y_0)$\\sample $t,\epsilon$};
+  \node[tensor, minimum width=35mm] (yt) at (152,-82) {noisy $y_t$\\\shape{B,1,256,256}};
+  \node[tensor, minimum width=35mm] (sc) at (152,-118) {self-condition\\$\hat{x}_0^{prev}$ or 0\\\shape{B,1,256,256}};
+  \node[op, minimum width=39mm] (concat) at (211,-100) {concat channels\\$[y_t,\hat{x}_0^{prev},pic]$};
+  \node[tensor, minimum width=38mm] (modelin) at (260,-100) {model input\\\shape{B,10,256,256}};
+
+  \node[unet, text width=103mm, minimum height=116mm] (unetbox) at (331,-47) {
+    \textbf{ConditionalUNet, base48}\\[1mm]
+    input conv: \shape{B,10,256,256} $\rightarrow$ \shape{B,48,256,256}\\
+    D0: 2 ResBlocks + Pic + FiLM $\rightarrow$ \shape{B,48,256,256}\\
+    D1: 2 ResBlocks + Pic + FiLM $\rightarrow$ \shape{B,96,128,128}\\
+    D2: 2 ResBlocks + Pic + FiLM $\rightarrow$ \shape{B,192,64,64}\\
+    D3: 2 ResBlocks + SelfAttn + CrossAttn $\rightarrow$ \shape{B,192,32,32}\\
+    Mid: ResBlock + SelfAttn + CrossAttn + ResBlock\\
+    U3: 2 ResBlocks + SelfAttn + CrossAttn + skip concat\\
+    U2/U1/U0: 3 ResBlocks each + skip concat\\
+    all ResBlocks receive FiLM; all ResBlocks add matching PicAdapter feature\\
+    head: GroupNorm + SiLU + Conv $\rightarrow$ \shape{B,1,256,256}
+  };
+
+  \node[tensor, minimum width=34mm] (pred) at (407,-27) {predicted $v$\\\shape{B,1,256,256}};
+  \node[op, minimum width=34mm] (x0pred) at (407,-72) {recover\\$\hat{x}_0$\\\shape{B,1,256,256}};
+  \node[tensor, minimum width=34mm] (out) at (407,-117) {output map\\clamp [0,1]\\\shape{B,1,256,256}};
+  \node[loss, text width=104mm, minimum height=23mm] (losses) at (318,-155) {
+    Training losses: MSE on $v$, L1/SSIM terms, clean $\hat{x}_0$ L1, TV, range.
+    Optional physics term uses frequency-aware RayOperator, not frequency mean.
+  };
+
+  \draw[arrow] (pic) -- (picenc);
+  \draw[arrow] (picenc) -- (pfeat);
+  \draw[arrow] (pfeat.east) -- ++(18,0) |- node[pos=0.18,above,font=\scriptsize]{add after every ResBlock} (unetbox.north);
+
   \draw[arrow] (xmat) -- (xenc);
-  \draw[arrow] (xenc) -- (xemb);
-  \draw[arrow] (xemb) -- (film);
-  \draw[arrow] (temb) -- (film);
-  \draw[arrow] (y0) -- (noise);
-  \draw[arrow] (noise) -- (yt);
-  \draw[arrow] (unetbox) -- (vpred);
-  \draw[arrow] (vpred) -- (x0pred);
+  \draw[arrow] (xenc.east) -- ++(12,0) |- (emb.west);
+  \draw[arrow] (xenc.east) -- ++(12,0) |- (tok.west);
+  \draw[arrow] (emb) -- (film);
+  \draw[arrow] (tok) -- (cross);
+  \draw[arrow] (film.east) -- ++(12,0) |- node[pos=0.22,above,font=\scriptsize]{FiLM to every ResBlock} (unetbox.west);
+  \draw[arrow] (cross.east) -- ++(12,0) |- node[pos=0.24,below,font=\scriptsize]{x-token cross-attention} ($(unetbox.west)+(0,-14)$);
+
+  \draw[arrow] (y0) -- (qsample);
+  \draw[arrow] (qsample) -- (yt);
+  \draw[arrow] (yt) -- (concat);
+  \draw[arrow] (sc) -- (concat);
+  \draw[arrow] (pic.south) -- ++(-24,0) |- (211,-64) -- (concat.north);
+  \draw[arrow] (concat) -- (modelin);
+  \draw[arrow] (modelin) -- (unetbox);
+
+  \draw[arrow] (unetbox.east) -- (pred);
+  \draw[arrow] (pred) -- (x0pred);
   \draw[arrow] (x0pred) -- (out);
-  \draw[arrow] (out) -- (losses);
-
-  % Routed arrows that avoid node text
-  \draw[arrow] (yt.north) -- ++(0,20) -| (concat.south);
-  \draw[arrow] (film.north) -- ++(0,21) -| node[pos=0.22,above,font=\scriptsize]{FiLM to every ResBlock} (unetbox.south);
-  \draw[arrow] (y0.east) -- ++(18,0) |- (losses.west);
-
-  % Visual grouping
-  \node[draw, rounded corners=3pt, dashed, fit=(pic)(concat)(unetin), inner sep=4mm, label={[font=\footnotesize]above:spatial image condition path}] {};
-  \node[draw, rounded corners=3pt, dashed, fit=(xmat)(xenc)(xemb)(temb)(film), inner sep=4mm, label={[font=\footnotesize]below:data and timestep condition path}] {};
-  \node[draw, rounded corners=3pt, dashed, fit=(y0)(noise)(yt), inner sep=4mm, label={[font=\footnotesize]below:training noising path}] {};
+  \draw[arrow] (x0pred.east) -- ++(8,0) |- (losses.east);
+  \draw[arrow] (y0.south) -- ++(0,-58) -| (losses.west);
 \end{tikzpicture}
 
 \newpage
 
 \begin{center}
 {\Large U-Net Tensor Shapes and Block Counts}\\[1mm]
-{\small Configuration: base=48, channel\_mult=[1,2,4,4], num\_res\_blocks=2, attention\_resolutions=[32].}
+{\small Configuration: base=48, channel\_mult=[1,2,4,4], num\_res\_blocks=2, attention\_resolutions=[32], cross\_attention\_resolutions=[32].}
 \end{center}
 
-\begin{tabular}{>{\raggedright\arraybackslash}p{28mm} >{\raggedright\arraybackslash}p{43mm} >{\raggedright\arraybackslash}p{38mm} >{\raggedright\arraybackslash}p{42mm} >{\raggedright\arraybackslash}p{90mm}}
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{31mm} >{\raggedright\arraybackslash}p{44mm} >{\raggedright\arraybackslash}p{43mm} >{\raggedright\arraybackslash}p{42mm} >{\raggedright\arraybackslash}p{245mm}}
 \toprule
 Stage & Operation & Input shape & Output shape & Notes \\
 \midrule
-Input concat & concat $y_t$ and pic & \shape{B,1,256,256} + \shape{B,8,256,256} & \shape{B,9,256,256} & image condition is channel-concatenated. \\
-Input conv & 3x3 conv & \shape{B,9,256,256} & \shape{B,48,256,256} & first feature map. \\
-Down level 0 & 2 x ResBlock(48) & \shape{B,48,256,256} & \shape{B,48,256,256} & stores 2 skip tensors at 256. \\
-Downsample 0 & stride-2 conv & \shape{B,48,256,256} & \shape{B,48,128,128} & stores pre-downsample skip. \\
-Down level 1 & ResBlock 48->96, ResBlock 96->96 & \shape{B,48,128,128} & \shape{B,96,128,128} & stores 2 skip tensors at 128. \\
-Downsample 1 & stride-2 conv & \shape{B,96,128,128} & \shape{B,96,64,64} & stores pre-downsample skip. \\
-Down level 2 & ResBlock 96->192, ResBlock 192->192 & \shape{B,96,64,64} & \shape{B,192,64,64} & stores 2 skip tensors at 64. \\
-Downsample 2 & stride-2 conv & \shape{B,192,64,64} & \shape{B,192,32,32} & stores pre-downsample skip. \\
-Down level 3 & 2 x ResBlock(192) + Attention after each & \shape{B,192,32,32} & \shape{B,192,32,32} & stores 2 skip tensors at 32. \\
-Middle & ResBlock + Attention + ResBlock & \shape{B,192,32,32} & \shape{B,192,32,32} & bottleneck. \\
-Up level 3 & 2 x concat skip + ResBlock(384->192) + Attention & \shape{B,192,32,32} & \shape{B,192,32,32} & consumes two 32 skips. \\
-Upsample 3 & nearest upsample + 3x3 conv & \shape{B,192,32,32} & \shape{B,192,64,64} & moves to 64. \\
-Up level 2 & 3 x concat skip + ResBlock & \shape{B,192,64,64} & \shape{B,192,64,64} & consumes downsample skip + two 64 skips. \\
-Upsample 2 & nearest upsample + 3x3 conv & \shape{B,192,64,64} & \shape{B,192,128,128} & moves to 128. \\
-Up level 1 & 3 x concat skip + ResBlock & \shape{B,192,128,128} & \shape{B,96,128,128} & final channel count at this level is 96. \\
-Upsample 1 & nearest upsample + 3x3 conv & \shape{B,96,128,128} & \shape{B,96,256,256} & moves to 256. \\
-Up level 0 & 3 x concat skip + ResBlock & \shape{B,96,256,256} & \shape{B,48,256,256} & final high-res feature map. \\
-Output head & GroupNorm + SiLU + 3x3 conv & \shape{B,48,256,256} & \shape{B,1,256,256} & predicts $v$ by default. \\
+Input concat & concat $y_t$, self-condition, pic & \shape{B,1,256,256} + \shape{B,1,256,256} + \shape{B,8,256,256} & \shape{B,10,256,256} & Self-condition is zero during the first prediction or a detached previous $\hat{x}_0$. \\
+Input conv & 3x3 conv & \shape{B,10,256,256} & \shape{B,48,256,256} & First image-stream feature map. \\
+Down level 0 & 2 x ResBlock(48) & \shape{B,48,256,256} & \shape{B,48,256,256} & Each ResBlock uses FiLM and adds $p_{256}$; stores two 256 skips. \\
+Downsample 0 & stride-2 conv & \shape{B,48,256,256} & \shape{B,48,128,128} & Stores one pre-downsample skip. \\
+Down level 1 & ResBlock 48->96, ResBlock 96->96 & \shape{B,48,128,128} & \shape{B,96,128,128} & Each ResBlock uses FiLM and adds $p_{128}$; stores two 128 skips. \\
+Downsample 1 & stride-2 conv & \shape{B,96,128,128} & \shape{B,96,64,64} & Stores one pre-downsample skip. \\
+Down level 2 & ResBlock 96->192, ResBlock 192->192 & \shape{B,96,64,64} & \shape{B,192,64,64} & Each ResBlock uses FiLM and adds $p_{64}$; stores two 64 skips. \\
+Downsample 2 & stride-2 conv & \shape{B,192,64,64} & \shape{B,192,32,32} & Stores one pre-downsample skip. \\
+Down level 3 & 2 x ResBlock(192) + SelfAttn + CrossAttn after each & \shape{B,192,32,32} & \shape{B,192,32,32} & Each ResBlock uses FiLM and adds $p_{32}$; x-token cross-attention is active at 32 resolution. \\
+Middle & ResBlock + SelfAttn + CrossAttn + ResBlock & \shape{B,192,32,32} & \shape{B,192,32,32} & Bottleneck; x-token cross-attention is always present here. \\
+Up level 3 & 2 x concat skip + ResBlock + SelfAttn + CrossAttn & \shape{B,192,32,32} & \shape{B,192,32,32} & Consumes two 32 skips; each ResBlock adds $p_{32}$. \\
+Upsample 3 & nearest upsample + 3x3 conv & \shape{B,192,32,32} & \shape{B,192,64,64} & Moves to 64. \\
+Up level 2 & 3 x concat skip + ResBlock & \shape{B,192,64,64} & \shape{B,192,64,64} & Consumes downsample skip plus two 64 skips; each ResBlock adds $p_{64}$. \\
+Upsample 2 & nearest upsample + 3x3 conv & \shape{B,192,64,64} & \shape{B,192,128,128} & Moves to 128. \\
+Up level 1 & 3 x concat skip + ResBlock & \shape{B,192,128,128} & \shape{B,96,128,128} & Consumes downsample skip plus two 128 skips; each ResBlock adds $p_{128}$. \\
+Upsample 1 & nearest upsample + 3x3 conv & \shape{B,96,128,128} & \shape{B,96,256,256} & Moves to 256. \\
+Up level 0 & 3 x concat skip + ResBlock & \shape{B,96,256,256} & \shape{B,48,256,256} & Consumes downsample skip plus two 256 skips; each ResBlock adds $p_{256}$. \\
+Output head & GroupNorm + SiLU + 3x3 conv & \shape{B,48,256,256} & \shape{B,1,256,256} & Predicts $v$ by default. \\
 \bottomrule
 \end{tabular}
+\normalsize
 
 \vspace{4mm}
 
-\begin{tikzpicture}[node distance=6mm and 5mm, transform shape, scale=0.88]
-  \node[unet, minimum width=30mm] (d0) {D0\\2 ResBlocks\\\shape{B,48,256,256}};
-  \node[unet, minimum width=30mm, right=of d0] (d1) {D1\\2 ResBlocks\\\shape{B,96,128,128}};
-  \node[unet, minimum width=30mm, right=of d1] (d2) {D2\\2 ResBlocks\\\shape{B,192,64,64}};
-  \node[unet, minimum width=34mm, right=of d2] (d3) {D3\\2 ResBlocks + Attn\\\shape{B,192,32,32}};
-  \node[block, minimum width=34mm, right=of d3] (mid) {Middle\\Res + Attn + Res\\\shape{B,192,32,32}};
-  \node[unet, minimum width=34mm, right=of mid] (u3) {U3\\2 ResBlocks + Attn\\\shape{B,192,32,32}};
-  \node[unet, minimum width=30mm, right=of u3] (u2) {U2\\3 ResBlocks\\\shape{B,192,64,64}};
-  \node[unet, minimum width=30mm, right=of u2] (u1) {U1\\3 ResBlocks\\\shape{B,96,128,128}};
-  \node[unet, minimum width=30mm, right=of u1] (u0) {U0\\3 ResBlocks\\\shape{B,48,256,256}};
+\begin{tikzpicture}[node distance=6mm and 5mm, transform shape, scale=0.82]
+  \node[tensor, minimum width=27mm] (inp) {input\\\shape{B,10,256,256}};
+  \node[unet, align=center, minimum width=29mm, right=of inp] (d0) {D0\\2 Res + Pic\\\shape{B,48,256,256}};
+  \node[unet, align=center, minimum width=29mm, right=of d0] (d1) {D1\\2 Res + Pic\\\shape{B,96,128,128}};
+  \node[unet, align=center, minimum width=29mm, right=of d1] (d2) {D2\\2 Res + Pic\\\shape{B,192,64,64}};
+  \node[unet, align=center, minimum width=34mm, right=of d2] (d3) {D3\\2 Res + Attn\\2 CrossAttn\\\shape{B,192,32,32}};
+  \node[block, minimum width=35mm, right=of d3] (mid) {Middle\\Res + Attn\\Cross + Res\\\shape{B,192,32,32}};
+  \node[unet, align=center, minimum width=34mm, right=of mid] (u3) {U3\\2 Res + Attn\\2 CrossAttn\\\shape{B,192,32,32}};
+  \node[unet, align=center, minimum width=29mm, right=of u3] (u2) {U2\\3 Res + Pic\\\shape{B,192,64,64}};
+  \node[unet, align=center, minimum width=29mm, right=of u2] (u1) {U1\\3 Res + Pic\\\shape{B,96,128,128}};
+  \node[unet, align=center, minimum width=29mm, right=of u1] (u0) {U0\\3 Res + Pic\\\shape{B,48,256,256}};
   \node[tensor, minimum width=25mm, right=of u0] (head) {head\\\shape{B,1,256,256}};
 
+  \draw[arrow] (inp) -- (d0);
   \draw[arrow] (d0) -- node[above,font=\scriptsize]{down} (d1);
   \draw[arrow] (d1) -- node[above,font=\scriptsize]{down} (d2);
   \draw[arrow] (d2) -- node[above,font=\scriptsize]{down} (d3);
@@ -172,29 +195,29 @@ Output head & GroupNorm + SiLU + 3x3 conv & \shape{B,48,256,256} & \shape{B,1,25
   \draw[arrow] (u1) -- node[above,font=\scriptsize]{up} (u0);
   \draw[arrow] (u0) -- (head);
 
-  \draw[skip] (d3.north) to[bend left=25] node[above,font=\scriptsize]{skip at 32} (u3.north);
-  \draw[skip] (d2.north) to[bend left=30] node[above,font=\scriptsize]{skip at 64} (u2.north);
-  \draw[skip] (d1.north) to[bend left=35] node[above,font=\scriptsize]{skip at 128} (u1.north);
-  \draw[skip] (d0.north) to[bend left=40] node[above,font=\scriptsize]{skip at 256} (u0.north);
+  \draw[skip] (d3.north) to[bend left=20] node[above,font=\scriptsize]{32 skips} (u3.north);
+  \draw[skip] (d2.north) to[bend left=25] node[above,font=\scriptsize]{64 skips} (u2.north);
+  \draw[skip] (d1.north) to[bend left=30] node[above,font=\scriptsize]{128 skips} (u1.north);
+  \draw[skip] (d0.north) to[bend left=35] node[above,font=\scriptsize]{256 skips} (u0.north);
 \end{tikzpicture}
 
 \newpage
 
 \begin{center}
-{\Large Block Internal Structure}
+{\Large Core Blocks}
 \end{center}
 
 \begin{tikzpicture}[node distance=7mm and 6mm, transform shape, scale=0.92]
   \node[tensor, minimum width=28mm] (xin) {input $h$\\\shape{B,Cin,H,W}};
   \node[block, minimum width=28mm, right=of xin] (gn1) {GroupNorm\\SiLU};
   \node[block, minimum width=28mm, right=of gn1] (conv1) {3x3 Conv\\Cin -> Cout};
-  \node[cond, minimum width=35mm, above=of conv1] (cond) {condition $c$\\\shape{B,256}};
+  \node[cond, minimum width=35mm, above=of conv1] (cond) {condition $c$\\$e_x+e_t$\\\shape{B,256}};
   \node[cond, minimum width=35mm, right=of cond] (lin) {Linear(c)\\scale, shift\\\shape{B,2*Cout}};
   \node[block, minimum width=31mm, right=of conv1] (gn2) {GroupNorm\\FiLM\\$h(1+s)+b$};
   \node[block, minimum width=28mm, right=of gn2] (drop) {SiLU\\Dropout};
   \node[block, minimum width=28mm, right=of drop] (conv2) {3x3 Conv\\Cout -> Cout};
   \node[op, minimum width=28mm, below=of conv2] (skip) {skip path\\Identity or 1x1 Conv};
-  \node[tensor, minimum width=28mm, right=of conv2] (xout) {output\\\shape{B,Cout,H,W}};
+  \node[tensor, minimum width=28mm, right=of conv2] (xout) {ResBlock output\\\shape{B,Cout,H,W}};
 
   \draw[arrow] (xin) -- (gn1);
   \draw[arrow] (gn1) -- (conv1);
@@ -210,90 +233,187 @@ Output head & GroupNorm + SiLU + 3x3 conv & \shape{B,48,256,256} & \shape{B,1,25
 
 \vspace{6mm}
 
-\begin{tikzpicture}[node distance=7mm and 6mm, transform shape, scale=0.95]
-  \node[tensor, minimum width=34mm] (ain) {input feature\\\shape{B,C,H,W}};
+\begin{tikzpicture}[node distance=7mm and 6mm, transform shape, scale=0.92]
+  \node[tensor, minimum width=34mm] (ain) {U-Net feature\\\shape{B,C,H,W}};
   \node[block, minimum width=30mm, right=of ain] (norm) {GroupNorm};
-  \node[block, minimum width=36mm, right=of norm] (flat) {flatten spatial\\\shape{B,H*W,C}};
-  \node[block, minimum width=34mm, right=of flat] (mha) {Multi-head\\self attention};
-  \node[block, minimum width=36mm, right=of mha] (unflat) {reshape back\\\shape{B,C,H,W}};
-  \node[tensor, minimum width=30mm, right=of unflat] (aout) {residual add\\\shape{B,C,H,W}};
+  \node[block, minimum width=36mm, right=of norm] (q) {spatial queries\\\shape{B,H*W,C}\\Linear C->256};
+  \node[cond, minimum width=38mm, above=of q] (tokens) {x tokens $T_x$\\\shape{B,256,256}\\LayerNorm};
+  \node[block, minimum width=34mm, right=of q] (mha) {Multi-head\\cross attention\\4 heads};
+  \node[block, minimum width=36mm, right=of mha] (proj) {Linear 256->C\\reshape\\\shape{B,C,H,W}};
+  \node[tensor, minimum width=30mm, right=of proj] (aout) {residual add\\\shape{B,C,H,W}};
 
   \draw[arrow] (ain) -- (norm);
-  \draw[arrow] (norm) -- (flat);
-  \draw[arrow] (flat) -- (mha);
-  \draw[arrow] (mha) -- (unflat);
-  \draw[arrow] (unflat) -- (aout);
+  \draw[arrow] (norm) -- (q);
+  \draw[arrow] (q) -- (mha);
+  \draw[arrow] (tokens) -- (mha);
+  \draw[arrow] (mha) -- (proj);
+  \draw[arrow] (proj) -- (aout);
   \draw[skip] (ain.south) to[bend right=25] (aout.south);
 \end{tikzpicture}
 
 \vspace{6mm}
 
-\begin{tikzpicture}[node distance=6mm and 4mm, transform shape, scale=0.86]
-  \node[tensor, minimum width=32mm] (xm) {x\_matrix\\\shape{B,7,15,16,16}};
-  \node[op, minimum width=32mm, right=of xm] (reshape) {reshape\\\shape{B,105,16,16}};
-  \node[block, minimum width=31mm, right=of reshape] (c1) {Conv 3x3\\105 -> 64};
-  \node[block, minimum width=31mm, right=of c1] (c2) {Conv 3x3\\64 -> 64};
-  \node[block, minimum width=31mm, right=of c2] (c3) {stride Conv\\64 -> 128\\\shape{B,128,8,8}};
-  \node[block, minimum width=31mm, right=of c3] (c4) {Conv 3x3\\128 -> 128};
-  \node[block, minimum width=31mm, right=of c4] (pool) {global avg pool\\\shape{B,128}};
-  \node[cond, minimum width=31mm, right=of pool] (mlp) {MLP\\128 -> 256 -> 256};
-  \node[cond, minimum width=31mm, right=of mlp] (emb) {embedding\\\shape{B,256}};
+\begin{tikzpicture}[node distance=7mm and 6mm, transform shape, scale=0.9]
+  \node[tensor, minimum width=34mm] (ain) {U-Net feature\\after ResBlock\\\shape{B,C,H,W}};
+  \node[cond, minimum width=40mm, above=of ain] (pfeat) {matching pic feature\\$p_H$\\\shape{B,C,H,W}};
+  \node[op, minimum width=32mm, right=of pfeat] (resize) {bilinear resize\\if needed};
+  \node[block, minimum width=36mm, right=of ain] (add) {add adapter\\$h \leftarrow h+p_H$};
+  \node[tensor, minimum width=34mm, right=of add] (out) {adapted feature\\\shape{B,C,H,W}};
 
-  \draw[arrow] (xm) -- (reshape);
-  \draw[arrow] (reshape) -- (c1);
-  \draw[arrow] (c1) -- (c2);
-  \draw[arrow] (c2) -- (c3);
-  \draw[arrow] (c3) -- (c4);
-  \draw[arrow] (c4) -- (pool);
-  \draw[arrow] (pool) -- (mlp);
-  \draw[arrow] (mlp) -- (emb);
+  \draw[arrow] (ain) -- (add);
+  \draw[arrow] (pfeat) -- (resize);
+  \draw[arrow] (resize) -| (add);
+  \draw[arrow] (add) -- (out);
 \end{tikzpicture}
 
-\vspace{4mm}
+\vspace{5mm}
 
-\begin{tabular}{>{\raggedright\arraybackslash}p{45mm} >{\raggedright\arraybackslash}p{205mm}}
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{46mm} >{\raggedright\arraybackslash}p{350mm}}
 \toprule
 Block & Stack rule in code \\
 \midrule
-ResBlock & GroupNorm + SiLU + Conv, then FiLM-conditioned GroupNorm, SiLU + Dropout + Conv, plus identity or 1x1 skip. Every ResBlock receives the same condition vector $c=e_x+e_t$. \\
-AttentionBlock & Used only where spatial resolution equals 32 for base48 config. It is self-attention over the flattened $H \times W$ locations. \\
+ResBlock & GroupNorm + SiLU + Conv, then FiLM-conditioned GroupNorm, SiLU + Dropout + Conv, plus identity or 1x1 skip. Every ResBlock receives $c=e_x+e_t$. \\
+PicAdapter add & After every ResBlock, the U-Net adds the PicEncoder zero-conv feature matching the current level. It is bilinearly resized only if the spatial size differs. \\
+AttentionBlock & Self-attention over flattened $H \times W$ locations. In the base48 config it is used at resolution 32 and in the middle block. \\
+CrossAttentionBlock & Queries come from normalized U-Net spatial tokens. Keys and values come from TX-RX x tokens. It is used at resolution 32 and in the middle block. \\
 Downsample & 3x3 stride-2 convolution. Channels stay the same; resolution halves. \\
 Upsample & nearest-neighbor upsample by 2, then 3x3 convolution. Channels stay the same; resolution doubles. \\
-Skip concatenation & Decoder ResBlocks concatenate the current feature with the latest saved encoder skip tensor along the channel dimension before the ResBlock. \\
+Skip concatenation & Decoder ResBlocks concatenate the current feature with the latest saved encoder skip tensor along channel dimension before the ResBlock. \\
 \bottomrule
 \end{tabular}
+\normalsize
 
 \newpage
 
 \begin{center}
-{\Large Diffusion Training and Sampling Equations}
+{\Large Condition Encoders}
 \end{center}
 
-\begin{tabular}{>{\raggedright\arraybackslash}p{45mm} >{\raggedright\arraybackslash}p{205mm}}
+\begin{tikzpicture}[node distance=6mm and 4mm, transform shape, scale=0.84]
+  \node[tensor, minimum width=31mm] (picin) {pic\\\shape{B,8,256,256}};
+  \node[block, minimum width=34mm, right=of picin] (p0) {level 0\\Conv 8->48\\Conv 48->48\\\shape{B,48,256,256}};
+  \node[cond, minimum width=25mm, above=of p0] (z0) {zero conv\\$p_{256}$};
+  \node[block, minimum width=34mm, right=of p0] (p1) {level 1\\stride Conv 48->96\\Conv 96->96\\\shape{B,96,128,128}};
+  \node[cond, minimum width=25mm, above=of p1] (z1) {zero conv\\$p_{128}$};
+  \node[block, minimum width=34mm, right=of p1] (p2) {level 2\\stride Conv 96->192\\Conv 192->192\\\shape{B,192,64,64}};
+  \node[cond, minimum width=25mm, above=of p2] (z2) {zero conv\\$p_{64}$};
+  \node[block, minimum width=34mm, right=of p2] (p3) {level 3\\stride Conv 192->192\\Conv 192->192\\\shape{B,192,32,32}};
+  \node[cond, minimum width=25mm, above=of p3] (z3) {zero conv\\$p_{32}$};
+
+  \draw[arrow] (picin) -- (p0);
+  \draw[arrow] (p0) -- (p1);
+  \draw[arrow] (p1) -- (p2);
+  \draw[arrow] (p2) -- (p3);
+  \draw[arrow] (p0) -- (z0);
+  \draw[arrow] (p1) -- (z1);
+  \draw[arrow] (p2) -- (z2);
+  \draw[arrow] (p3) -- (z3);
+\end{tikzpicture}
+
+\vspace{9mm}
+
+\begin{tikzpicture}[node distance=6mm and 4mm, transform shape, scale=0.84]
+  \node[tensor, minimum width=32mm] (xm) {x\_matrix\\\shape{B,7,15,16,16}};
+  \node[op, minimum width=32mm, right=of xm] (reshape) {reshape\\\shape{B,105,16,16}};
+  \node[block, minimum width=31mm, right=of reshape] (c1) {stem Conv\\105 -> 64\\GN + SiLU};
+  \node[block, minimum width=31mm, right=of c1] (c2) {stem Conv\\64 -> 64\\GN + SiLU\\\shape{B,64,16,16}};
+
+  \node[block, minimum width=34mm, above right=11mm and 8mm of c2] (g1) {global branch\\stride Conv\\64 -> 128\\\shape{B,128,8,8}};
+  \node[block, minimum width=33mm, right=of g1] (g2) {Conv 128->128\\global avg pool\\\shape{B,128}};
+  \node[cond, minimum width=35mm, right=of g2] (mlp) {MLP\\128 -> 256 -> 256};
+  \node[cond, minimum width=31mm, right=of mlp] (embout) {embedding\\$e_x$\\\shape{B,256}};
+
+  \node[block, minimum width=34mm, below right=11mm and 8mm of c2] (t1) {token branch\\1x1 Conv\\64 -> 256\\GN + SiLU};
+  \node[block, minimum width=33mm, right=of t1] (t2) {1x1 Conv\\256 -> 256\\\shape{B,256,16,16}};
+  \node[cond, minimum width=39mm, right=of t2] (tokens) {flatten TX-RX\\$16*16=256$ tokens\\$T_x$ \shape{B,256,256}};
+
+  \draw[arrow] (xm) -- (reshape);
+  \draw[arrow] (reshape) -- (c1);
+  \draw[arrow] (c1) -- (c2);
+  \draw[arrow] (c2) |- (g1);
+  \draw[arrow] (g1) -- (g2);
+  \draw[arrow] (g2) -- (mlp);
+  \draw[arrow] (mlp) -- (embout);
+  \draw[arrow] (c2) |- (t1);
+  \draw[arrow] (t1) -- (t2);
+  \draw[arrow] (t2) -- (tokens);
+\end{tikzpicture}
+
+\vspace{8mm}
+
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{60mm} >{\raggedright\arraybackslash}p{335mm}}
+\toprule
+Encoder output & Where it is used \\
+\midrule
+$e_x$ \shape{B,256} & Added to the timestep embedding $e_t$ and passed to every ResBlock FiLM linear layer. \\
+$T_x$ \shape{B,256,256} & Used as keys and values in CrossAttentionBlock at 32 resolution and in the middle block. This keeps TX-RX spatial structure instead of collapsing all x information to one vector. \\
+$p_{256},p_{128},p_{64},p_{32}$ & Added after each ResBlock at the matching U-Net scale. Zero-conv outputs start from zero influence and learn the coarse-map residual control during training. \\
+\bottomrule
+\end{tabular}
+\normalsize
+
+\newpage
+
+\begin{center}
+{\Large Diffusion, Self-Conditioning, and Physics Equations}
+\end{center}
+
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{58mm} >{\raggedright\arraybackslash}p{338mm}}
 \toprule
 Step & Formula and tensor shape \\
 \midrule
-Forward noising & $y_t=\sqrt{\bar{\alpha}_t}y_0+\sqrt{1-\bar{\alpha}_t}\epsilon$, all image tensors are \shape{B,1,256,256}. \\
-Condition image & $\mathrm{input}=\mathrm{concat}(y_t, pic)$ gives \shape{B,9,256,256}. \\
-Condition vector & $e_x=\mathrm{XMatrixEncoder}(x)$, $e_t=\mathrm{TimeEmbedding}(t)$, $c=e_x+e_t$, all \shape{B,256}. \\
-Network prediction & $\hat{v}=\mathrm{ConditionalUNet}([y_t,pic],t,e_x)$ with shape \shape{B,1,256,256}. \\
+Forward noising & $y_t=\sqrt{\bar{\alpha}_t}y_0+\sqrt{1-\bar{\alpha}_t}\epsilon$, where $y_0,y_t,\epsilon$ are \shape{B,1,256,256}. \\
+Self-condition input & During training, with probability \texttt{self\_condition\_prob=0.5}, run one detached prediction and feed $\hat{x}_0^{prev}$ back into the final prediction. Otherwise use zeros. During sampling, each denoising step feeds the previous $\hat{x}_0$. \\
+Model image input & $\mathrm{model\_input}=\mathrm{concat}(y_t,\hat{x}_0^{prev},pic)$ gives \shape{B,10,256,256}. \\
+Condition encoders & $\mathrm{XMatrixEncoder}(x)=(e_x,T_x)$ with $e_x$ \shape{B,256} and $T_x$ \shape{B,256,256}. $\mathrm{PicEncoder}(pic)$ returns four adapter features. \\
+Network prediction & $\hat{v}=\mathrm{ConditionalUNet}(\mathrm{model\_input},t,e_x,T_x,pic)$ with output \shape{B,1,256,256}. \\
 Training target & With \texttt{prediction\_type=v\_prediction}: $v=\sqrt{\bar{\alpha}_t}\epsilon-\sqrt{1-\bar{\alpha}_t}y_0$. \\
-Main loss & $L_{diff}=\mathrm{MSE}(\hat{v},v)$. \\
-Auxiliary clean prediction & $\hat{x}_0=\sqrt{\bar{\alpha}_t}y_t-\sqrt{1-\bar{\alpha}_t}\hat{v}$, then use L1/TV/range/optional physics losses. \\
-Sampling & Start from $y_T\sim\mathcal{N}(0,I)$ and run DDIM/DDPM reverse steps with the same pic and x\_matrix conditions. Final output is clamped to \shape{B,1,256,256}. \\
+Clean prediction & $\hat{x}_0=\sqrt{\bar{\alpha}_t}y_t-\sqrt{1-\bar{\alpha}_t}\hat{v}$, clamped to [0,1] for sampling and self-conditioning. \\
+Main loss & $L_{diff}=\mathrm{MSE}(\hat{v},v)$ plus configured auxiliary terms such as L1/SSIM, $\hat{x}_0$ L1, TV, range, and optional physics consistency. \\
+Sampling & DDPM/DDIM starts from $y_T\sim\mathcal{N}(0,I)$ with shape \shape{B,1,256,256}. Each reverse step reuses the same pic and x\_matrix conditions and updates self-condition with the current $\hat{x}_0$. \\
 \bottomrule
 \end{tabular}
+\normalsize
 
-\vspace{5mm}
+\vspace{7mm}
 
-\begin{tabular}{>{\raggedright\arraybackslash}p{55mm} >{\raggedright\arraybackslash}p{195mm}}
+\begin{tikzpicture}[node distance=7mm and 6mm, transform shape, scale=0.92]
+  \node[tensor, minimum width=34mm] (img) {predicted map\\\shape{B,1,256,256}};
+  \node[block, minimum width=38mm, right=of img] (ray) {RayOperator\\helical kernels};
+  \node[tensor, minimum width=36mm, right=of ray] (predr) {predicted rays\\\shape{B,768}};
+  \node[op, minimum width=36mm, right=of predr] (expand) {expand over F\\\shape{B,15,768}};
+
+  \node[tensor, minimum width=37mm, below=14mm of img] (xmat2) {x\_matrix\\\shape{B,7,15,16,16}};
+  \node[block, minimum width=40mm, right=of xmat2] (select) {select feature index\\default 1\\\shape{B,15,16,16}};
+  \node[tensor, minimum width=36mm, right=of select] (obs) {observed rays\\flatten + helical repeat\\\shape{B,15,768}};
+  \node[op, minimum width=39mm, right=of obs] (norm) {robust normalize\\median/MAD};
+  \node[loss, minimum width=40mm, right=of norm] (physloss) {Smooth L1\\frequency-aware\\physics loss};
+
+  \draw[arrow] (img) -- (ray);
+  \draw[arrow] (ray) -- (predr);
+  \draw[arrow] (predr) -- (expand);
+  \draw[arrow] (expand) -| (norm);
+  \draw[arrow] (xmat2) -- (select);
+  \draw[arrow] (select) -- (obs);
+  \draw[arrow] (obs) -- (norm);
+  \draw[arrow] (norm) -- (physloss);
+\end{tikzpicture}
+
+\vspace{7mm}
+
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{64mm} >{\raggedright\arraybackslash}p{332mm}}
 \toprule
 Configuration note & Meaning \\
 \midrule
-This PDF main architecture & Uses \texttt{dataset\_a\_256\_base48.yaml}. This is the recommended 256 first-version model in the code. \\
-Debug config difference & \texttt{dataset\_a\_256\_debug.yaml} uses base=32, channel\_mult=[1,2,4], num\_res\_blocks=1, cond\_dim=192. Its path is the same but shorter: 256 -> 128 -> 64 bottleneck instead of 256 -> 128 -> 64 -> 32. \\
-Base64 config difference & \texttt{dataset\_a\_256\_base64.yaml} keeps the same topology as base48 but increases base channels to 64. Channel sequence becomes 64,128,256,256. \\
+Main architecture & This PDF uses \texttt{dataset\_a\_256\_base48.yaml}, the current default 256-resolution diffusion architecture. \\
+Base64 difference & \texttt{dataset\_a\_256\_base64.yaml} keeps the same topology but changes the channel sequence to 64,128,256,256. \\
+Removed old paths & The old global-embedding-only path, frequency-mean RayOperator path, and deleted debug configs are not part of this diagram. \\
 \bottomrule
 \end{tabular}
+\normalsize
 
 \end{document}

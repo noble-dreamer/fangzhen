@@ -1,6 +1,6 @@
 # Network Architecture Visualization
 
-This folder contains a LaTeX/TikZ visualization of the diffusion neural network.
+This folder contains the LaTeX/TikZ visualization of the current diffusion neural network.
 
 Main files:
 
@@ -17,12 +17,14 @@ simple/diffusion/configs/dataset_a_256_base48.yaml
 
 It shows:
 
-- the full `pic + x_matrix -> diffusion -> defect map` pipeline;
+- the full `pic + x_matrix + self_condition -> diffusion -> defect map` pipeline;
 - tensor shapes at each major step;
 - U-Net down/mid/up block counts;
-- ResBlock, AttentionBlock, and XMatrixEncoder internals;
-- how FiLM conditioning from `x_matrix` and timestep embeddings enters the U-Net;
-- how diffusion training and sampling use the network.
+- PicAdapter injection after every ResBlock;
+- FiLM conditioning from the x global embedding plus timestep embedding;
+- x-token cross-attention at 32 resolution and in the middle block;
+- XMatrixEncoder, PicEncoder, ResBlock, and CrossAttentionBlock internals;
+- self-conditioning, diffusion training/sampling, and frequency-aware RayOperator physics loss.
 
 Compile manually with:
 

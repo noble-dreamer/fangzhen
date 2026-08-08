@@ -18,7 +18,7 @@ import mph
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_ROOT = ROOT / 'output2'
-DEFECT_WINDOW_POWER = 2
+DEFECT_WINDOW_POWER = 3
 DEFECT_LOSS_MAX_MM = 5.0
 
 

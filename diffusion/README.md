@@ -632,14 +632,14 @@ simple/diffusion/
   configs/
     dataset_a_256_base48.yaml
     dataset_a_256_base64.yaml
-    dataset_a_2080ti_debug.yaml
   data/
     dataset.py
     transforms.py
   models/
     unet.py
     x_encoder.py
-    conditioning.py
+    regressor.py
+    diffusion.py
   physics/
     ray_operator.py
     losses.py
