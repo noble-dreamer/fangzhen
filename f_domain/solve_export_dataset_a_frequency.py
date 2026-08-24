@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import faulthandler
+import random
 import re
+from dataclasses import replace
 from pathlib import Path
 
 faulthandler.enable(all_threads=True)
@@ -32,6 +34,8 @@ def parse_args() -> argparse.Namespace:
         help='First damaged sample numeric id. Default: auto-select the first non-overlapping id segment.',
     )
     parser.add_argument('--seed0', type=int, default=710000)
+    parser.add_argument('--max-defect-strength-ratio', type=float, default=3.0)
+    parser.add_argument('--sampling-attempts', type=int, default=100)
     parser.add_argument('--tx', nargs='+', default=[fcommon.DEFAULT_TX])
     parser.add_argument('--frequencies', nargs='+', default=[fcommon.DEFAULT_FREQUENCIES])
     parser.add_argument(
@@ -158,6 +162,49 @@ def cli_list_text(values: list[str] | str) -> str:
     if isinstance(values, str):
         return values
     return ','.join(str(value) for value in values)
+
+
+def balanced_sampling_config() -> defects.DefectSamplingConfig:
+    balanced = defects.DefectSizeClass('balanced', (115.0, 200.0), (1.8, 3.4), (0, 1))
+    return defects.DefectSamplingConfig(
+        min_defects=1,
+        max_defects=3,
+        aspect_ratio_range=(0.85, 1.18),
+        irregular_lobes=True,
+        defect_count_weights=(0.45, 0.45, 0.10),
+        size_classes=(balanced,),
+        single_size_weights=(('balanced', 1.0),),
+        two_defect_size_patterns=((1.0, 'balanced', 'balanced'),),
+        three_defect_size_patterns=((1.0, 'balanced', 'balanced', 'balanced'),),
+    )
+
+
+def generate_balanced_sample(
+    sample_id: int,
+    seed0: int,
+    config: defects.DefectSamplingConfig,
+    max_strength_ratio: float,
+    max_attempts: int,
+) -> tuple[defects.GeneratedSample, int, int, dict[str, float | int]]:
+    if max_strength_ratio < 1.0:
+        raise ValueError('--max-defect-strength-ratio must be >= 1')
+    if max_attempts <= 0:
+        raise ValueError('--sampling-attempts must be positive')
+    base_seed = seed0 + sample_id
+    target_count = random.Random(base_seed).choices((1, 2, 3), weights=config.defect_count_weights, k=1)[0]
+    exact_count_config = replace(config, min_defects=target_count, max_defects=target_count)
+    for attempt in range(max_attempts):
+        seed = base_seed + attempt * 10_000_000
+        sample = defects.generate_sample(sample_id, seed, exact_count_config)
+        if len(sample.defects) != target_count:
+            continue
+        metrics = defects.defect_strength_metrics(sample.defects)
+        if metrics['strength_ratio'] <= max_strength_ratio:
+            return sample, seed, attempt + 1, metrics
+    raise RuntimeError(
+        f'Could not generate balanced sample {sample_id} with {target_count} defects '
+        f'and strength_ratio <= {max_strength_ratio:g} in {max_attempts} attempts.'
+    )
 
 
 def existing_damaged_sample_ids(output_root: Path) -> set[int]:
@@ -344,6 +391,25 @@ def main() -> None:
     )
     damaged_sample_ids = plan_damaged_sample_ids(args)
     solve_healthy, healthy_reason = should_solve_healthy(args, cases)
+    planned_samples = []
+    sampling = balanced_sampling_config()
+    for sample_id in damaged_sample_ids:
+        sample, seed, attempts, metrics = generate_balanced_sample(
+            sample_id, args.seed0, sampling, args.max_defect_strength_ratio, args.sampling_attempts
+        )
+        sample_metadata = defects.sample_to_dict(sample)
+        sample_metadata['sampling_profile'] = {
+            'name': 'balanced_detectable_v1',
+            'generation_attempts': attempts,
+            'max_strength_ratio': args.max_defect_strength_ratio,
+            'defect_count_weights': sampling.defect_count_weights,
+        }
+        sample_metadata['strength_metrics'] = metrics
+        planned_samples.append((sample_id, seed, sample, sample_metadata))
+        fcommon.streaming.console_log(
+            f'[sampling] sample={sample_id} defects={len(sample.defects)} seed={seed} '
+            f'attempts={attempts} strength_ratio={metrics["strength_ratio"]:.3f}'
+        )
     if args.include_healthy or args.only_healthy:
         if solve_healthy:
             fcommon.streaming.console_log(f'[healthy] solving healthy baseline: {healthy_reason}')
@@ -400,27 +466,19 @@ def main() -> None:
                 rows.append(result_row(result, None, 0, 0))
 
         if not args.only_healthy:
-            sampling = defects.DefectSamplingConfig(
-                min_defects=1,
-                max_defects=3,
-                aspect_ratio_range=(0.75, 1.45),
-                irregular_lobes=True,
-            )
-            for sample_id in damaged_sample_ids:
-                seed = args.seed0 + sample_id
-                sample = defects.generate_sample(sample_id, seed, sampling)
+            for sample_id, seed, sample, sample_metadata in planned_samples:
                 model_defects, model_lobes = defects.to_shell_defects(sample)
                 name = sample_name(sample_id)
                 result = fcommon.solve_export_frequency_sample(
                     client=client,
                     dataset='A_frequency',
                     sample_id=name,
-                    defect_state='damaged_random_outer_corrosion',
+                    defect_state='damaged_balanced_outer_corrosion',
                     output_root=args.output_root,
                     cases=cases,
                     defects=model_defects,
                     lobes=model_lobes,
-                    sample_metadata=defects.sample_to_dict(sample),
+                    sample_metadata=sample_metadata,
                     clear_each_case=clear_each_case,
                     heartbeat_s=args.heartbeat_s,
                     reuse_sample_model=not args.rebuild_each_case,

@@ -5,7 +5,7 @@
 ## 与时域模型的对应关系
 
 - 管道：同一个圆柱壳中面模型。
-- 缺陷：同一个壳厚度局部减薄模型；随机样本默认是 1-3 个平滑外表面腐蚀缺陷，采用小/中/大尺寸混合，多缺陷时优先大+中/小组合，少量浅 lobe，局部累计最大厚度损失限制为 5 mm。
+- 缺陷：同一个壳厚度局部减薄模型；频域随机样本默认使用可检出的平衡缺陷配置，1/2/3 个缺陷的目标比例为 45%/45%/10%，并限制样本内强弱比。
 - Dataset A 低反射边界：同一个两端轴向渐变 Rayleigh damping absorbing layer。
 - 发射端：同一个 PZT window 等效面载荷。
 - 接收端：同一个 `intop_shell(w_rx*w)/intop_shell(w_rx)` 小面积加权平均。
@@ -24,6 +24,7 @@ F(tx, f, theta, z) = F0/pzt_A * window_tx(theta, z)
 - `frequency_domain_common.py`: 频域建模、求解、导出公共逻辑。
 - `build_dataset_a_frequency_healthy.py`: 构建健康频域 MPH，不求解，用于 COMSOL 模型树检查。
 - `solve_export_dataset_a_frequency.py`: 流式频域求解与导出脚本。
+- `select_balanced_defect_samples.py`: 按 metadata 筛选已有的可检出、低对比度样本。
 - `select_sensitive_frequencies.py`: 根据健康/缺陷频响计算频点 sensitivity 并推荐频点。
 - `FREQUENCY_DOMAIN_DIFFUSION_PLAN.md`: 频域粗图、时域校准和 diffusion 训练规划。
 - `output_dataset/`: 频域脚本当前默认输出目录。这里保存 `physics_highfreq_quota` top15 训练数据，默认 healthy 已经是 top15 频率轴。
@@ -94,6 +95,22 @@ conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_d
 ```powershell
 conda run --no-capture-output -n comsol python -u simple/f_domain/solve_export_dataset_a_frequency.py --include-healthy --samples 1 --linear-solver pardiso --heartbeat-s 30
 ```
+
+### 平衡强缺陷采样与已有样本筛选
+
+新样本默认使用 `balanced_detectable_v1`：主缺陷直径 `115-200 mm`、深度 `1.8-3.4 mm`，椭圆长宽比 `0.85-1.18`；1/2/3 个缺陷的目标比例是 `45%/45%/10%`。面积×深度作为散射强度代理，同一样本中最大/最小强度默认不超过 `3`，不满足时会在启动 COMSOL 前重新采样。可通过以下参数收紧规则：
+
+```text
+--max-defect-strength-ratio 2.5 --sampling-attempts 200
+```
+
+已有 metadata 默认按“最小等效直径 ≥ 95 mm、最小深度 ≥ 1.5 mm、强度比 ≤ 3、缺陷数 ≤ 3”筛选：
+
+```powershell
+conda run --no-capture-output -n comsol python -u simple/f_domain/select_balanced_defect_samples.py
+```
+
+输出 `output_dataset/streaming_dataset_a_frequency_shell/balanced_defect_samples.csv`，只建立样本索引，不复制、删除或重算已有数据。
 
 ### 样本命名和续跑
 
