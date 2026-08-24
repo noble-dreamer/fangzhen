@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, Subset, random_split
+from torch.utils.data import DataLoader, Dataset, DistributedSampler, Subset, random_split
 
 from .transforms import DEFAULT_PIC_CHANNELS, RandomCircularRoll, normalize_x_matrix, resize_label_nearest
 
@@ -330,7 +330,14 @@ def build_dataset_from_config(config: dict[str, Any], *, split: str = "train") -
     )
 
 
-def build_dataloaders(config: dict[str, Any]) -> tuple[DataLoader, DataLoader | None]:
+def build_dataloaders(
+    config: dict[str, Any],
+    *,
+    distributed: bool = False,
+    rank: int = 0,
+    world_size: int = 1,
+    batch_size_multiplier: int = 1,
+) -> tuple[DataLoader, DataLoader | None]:
     train_dataset = build_dataset_from_config(config, split="train")
     data_cfg = config.get("data", {})
     loader_cfg = config.get("loader", {})
@@ -351,10 +358,23 @@ def build_dataloaders(config: dict[str, Any]) -> tuple[DataLoader, DataLoader | 
             train_dataset, val_dataset = random_split(train_dataset, [train_len, val_len], generator=generator)
         else:
             val_dataset = None
+    sampler_drop_last = bool(loader_cfg.get("drop_last", False))
+    if distributed and world_size < 2:
+        raise ValueError("Distributed loading requires world_size >= 2")
+    if distributed and not sampler_drop_last and len(train_dataset) % world_size:
+        raise ValueError("DDP requires a train split divisible by world_size when drop_last is false")
+    train_sampler = (
+        DistributedSampler(
+            train_dataset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=sampler_drop_last
+        )
+        if distributed
+        else None
+    )
     train_loader = DataLoader(
         train_dataset,
-        batch_size=int(loader_cfg.get("batch_size", 2)),
-        shuffle=True,
+        batch_size=int(loader_cfg.get("batch_size", 2)) * int(batch_size_multiplier),
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=int(loader_cfg.get("num_workers", 0)),
         pin_memory=bool(loader_cfg.get("pin_memory", True)),
         drop_last=bool(loader_cfg.get("drop_last", False)),
