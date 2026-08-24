@@ -1,0 +1,123 @@
+seed: 20260708
+deterministic: false
+run_dir: simple/diffusion_EDM/runs/dataset_a_256_base48_edm_3gpu_fp16
+
+parallel:
+  mode: auto
+  device_ids: [0, 1, 2]
+  require_device_count: 3
+  ddp_backend: nccl
+
+data:
+  coarse_dir: simple/get_pic/output_dataset/coarse_maps
+  x_dir: simple/get_pic/output_dataset/x_matrix
+  label_dir: simple/f_domain/output_dataset/streaming_dataset_a_frequency_shell/labels
+  image_size: 256
+  use_raw_pic: false
+  x_normalization: robust_per_sample
+  pic_channels:
+    - ray_log_amp_loss
+    - ray_relative_delta
+    - ray_phase_change
+    - low_frequency_band_map
+    - mid_frequency_band_map
+    - high_frequency_band_map
+    - path_coverage
+    - reliability_mask
+  train:
+    sample_ids_file: splits/dataset_a_1200_train_ids.txt
+    augment_circular_roll: false
+    x_noise_std: 0.0
+  val:
+    sample_ids_file: splits/dataset_a_1200_val_ids.txt
+    augment_circular_roll: false
+    x_noise_std: 0.0
+
+# batch_size is per card/process. DataParallel expands it to the global batch.
+loader:
+  batch_size: 3
+  val_batch_size: 16
+  num_workers: 2
+  pin_memory: true
+  drop_last: false
+
+model:
+  image_size: 256
+  target_channels: 1
+  x_channels: 7
+  frequency_count: 15
+  base_channels: 48
+  channel_mult: [1, 2, 4, 4]
+  num_res_blocks: 2
+  attention_resolutions: [32]
+  cond_dim: 256
+  x_hidden_channels: 64
+  x_token_dim: 256
+  spatial_frequency_fusion:
+    resolutions: [32]
+    heads: 4
+    filter_kernel_size: 5
+    physical_position:
+      tx_count: 16
+      rx_count: 16
+      pipe_length_mm: 1000.0
+      mid_radius_mm: 155.0
+      tx_z_mm: 100.0
+      rx_z_mm: 900.0
+      frequency_reference_hz: 100000.0
+  dropout: 0.05
+  self_condition_prob: 0.5
+
+edm:
+  sigma_data: 0.5
+  sigma_min: 0.002
+  sigma_max: 80.0
+  p_mean: -1.2
+  p_std: 1.2
+  rho: 7.0
+
+train:
+  epochs: 100
+  lr: 0.0001
+  weight_decay: 0.0001
+  warmup_steps: 120
+  min_lr_ratio: 0.05
+  amp: true
+  amp_dtype: float16
+  grad_clip: 1.0
+  ema: true
+  ema_decay: 0.999
+  log_every_steps: 10
+  save_every_steps: 240
+  val_every_steps: 120
+
+loss:
+  lambda_x0_l1: 0.05
+  lambda_tv: 0.001
+  lambda_range: 0.01
+  lambda_coverage_l1: 0.0
+  lambda_spectral: 0.01
+  lambda_phys_v1: 0.0
+  phys_feature_index: 1
+  phys_start_step: 20000
+  phys_warmup_steps: 60000
+
+sample:
+  steps: 32
+  sigma_min: 0.002
+  sigma_max: 80.0
+  rho: 7.0
+  s_churn: 0.0
+  s_tmin: 0.0
+  s_tmax: .inf
+  s_noise: 1.0
+  physics_guidance_scale: 0.0
+  physics_guidance_start_fraction: 0.5
+  uncertainty:
+    num_samples: 16
+    sample_seed: 20260712
+    lower_quantile: 0.05
+    upper_quantile: 0.95
+    defect_threshold: 0.1
+    consensus_probability_threshold: 0.5
+    save_all_samples: false
