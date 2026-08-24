@@ -310,6 +310,32 @@ def to_shell_defects(sample: GeneratedSample) -> tuple[list[shell.DefectConfig],
     return defects, lobes
 
 
+def defect_strength_metrics(defects: list[GeneratedDefect] | list[dict]) -> dict[str, float | int]:
+    if not defects:
+        raise ValueError('At least one defect is required to calculate strength metrics.')
+
+    def value(item: GeneratedDefect | dict, name: str) -> float | None:
+        raw = item.get(name) if isinstance(item, dict) else getattr(item, name)
+        return None if raw is None else float(raw)
+
+    diameters = [float(value(item, 'diameter_mm')) for item in defects]
+    depths = [float(value(item, 'depth_mm')) for item in defects]
+    strengths = []
+    for item, diameter, depth in zip(defects, diameters, depths):
+        diameter_theta = value(item, 'diameter_theta_mm') or diameter
+        diameter_z = value(item, 'diameter_z_mm') or diameter
+        strengths.append(math.pi * diameter_theta * diameter_z * depth / 4.0)
+    minimum_strength = min(strengths)
+    return {
+        'defect_count': len(defects),
+        'min_diameter_mm': min(diameters),
+        'min_depth_mm': min(depths),
+        'min_strength_proxy_mm3': minimum_strength,
+        'max_strength_proxy_mm3': max(strengths),
+        'strength_ratio': max(strengths) / max(minimum_strength, 1e-12),
+    }
+
+
 def sample_to_dict(sample: GeneratedSample) -> dict:
     return {
         'sample_id': sample.sample_id,
