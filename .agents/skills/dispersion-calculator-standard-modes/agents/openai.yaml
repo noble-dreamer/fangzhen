@@ -1,0 +1,4 @@
+interface:
+  display_name: "DC Standard Dispersion"
+  short_description: "Export and validate standard pipe dispersion modes"
+  default_prompt: "Use $dispersion-calculator-standard-modes to configure DC and export any missing standard pipe-mode data."
