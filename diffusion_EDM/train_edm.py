@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parent
@@ -42,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, default=None)
     parser.add_argument("--resume", type=Path, default=None, help="Checkpoint path. Use 'latest' to auto-detect.")
+    parser.add_argument("--init-checkpoint", type=Path, default=None, help="Load weights only and reset training state.")
     parser.add_argument("--device", type=str, default="auto")
     return parser.parse_args()
 
@@ -88,12 +94,126 @@ def build_model(config: dict) -> EDMDiffusion:
     )
 
 
-def spectral_magnitude_loss(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+class EDMTrainingForward(nn.Module):
+    def __init__(self, model: EDMDiffusion) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, target: torch.Tensor, pic: torch.Tensor, x_matrix: torch.Tensor, **coordinates):
+        return self.model.training_losses(target, pic, x_matrix, **coordinates)
+
+
+def setup_parallel(config: dict, requested_device: str) -> SimpleNamespace:
+    cfg = config.get("parallel", {})
+    mode = str(cfg.get("mode", "auto")).lower()
+    ids = [int(value) for value in cfg.get("device_ids", [])]
+    required = int(cfg.get("require_device_count", len(ids)))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    visible = torch.cuda.device_count()
+    if mode not in {"auto", "single", "dp", "ddp"}:
+        raise ValueError(f"Unsupported parallel.mode: {mode}")
+    if required and visible < required:
+        raise RuntimeError(f"parallel requires {required} CUDA devices, but only {visible} are visible")
+    if world_size > 1:
+        if not torch.cuda.is_available():
+            raise RuntimeError("DDP requires CUDA")
+        expected = required or len(ids)
+        if expected and world_size != expected:
+            raise RuntimeError(f"WORLD_SIZE={world_size} does not match required device count {expected}")
+        rank = int(os.environ.get("RANK", "0"))
+        local_rank = int(os.environ.get("LOCAL_RANK", str(rank)))
+        backend = str(cfg.get("ddp_backend", "nccl"))
+        if ids and local_rank not in ids:
+            raise RuntimeError(f"LOCAL_RANK={local_rank} is not in parallel.device_ids={ids}")
+        if os.name == "nt" and backend == "nccl":
+            raise RuntimeError("NCCL DDP is unavailable on Windows; use normal Python for DataParallel")
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend=backend)
+        return SimpleNamespace(mode="ddp", device=torch.device("cuda", local_rank), rank=rank, count=world_size, main=rank == 0, ids=[local_rank])
+    if mode == "ddp":
+        raise RuntimeError("parallel.mode=ddp requires torchrun with WORLD_SIZE > 1")
+    if mode == "dp" and not ids:
+        ids = list(range(visible))
+    if mode == "dp" or (mode == "auto" and len(ids) > 1):
+        if len(ids) < 2 or not torch.cuda.is_available() or min(ids) < 0 or max(ids) >= visible:
+            raise RuntimeError("DataParallel requires the configured visible CUDA devices")
+        return SimpleNamespace(mode="dp", device=torch.device("cuda", ids[0]), rank=0, count=len(ids), main=True, ids=ids)
+    return SimpleNamespace(mode="single", device=resolve_device(requested_device), rank=0, count=1, main=True, ids=[])
+
+
+def wrap_training_forward(model: EDMDiffusion, runtime: SimpleNamespace) -> nn.Module:
+    forward = EDMTrainingForward(model)
+    if runtime.mode == "ddp":
+        return DDP(forward, device_ids=[runtime.device.index], output_device=runtime.device.index)
+    if runtime.mode == "dp":
+        return nn.DataParallel(forward, device_ids=runtime.ids, output_device=runtime.ids[0])
+    return forward
+
+
+def reduce_train_row(row: dict[str, float | int], runtime: SimpleNamespace) -> dict[str, float | int]:
+    if runtime.mode != "ddp":
+        return row
+    keys = (
+        "loss", "loss_edm", "loss_x0_l1", "loss_tv", "loss_range",
+        "loss_coverage_l1", "loss_spectral", "loss_phys_v1", "x0_mae",
+        "x0_rmse", "grad_norm", "sigma_mean", "sigma_min", "sigma_max",
+    )
+    values = torch.tensor([float(row[key]) for key in keys], device=runtime.device)
+    dist.all_reduce(values)
+    values.div_(runtime.count)
+    row.update(zip(keys, values.cpu().tolist()))
+    return row
+
+
+def barrier(runtime: SimpleNamespace) -> None:
+    if runtime.mode == "ddp":
+        dist.barrier()
+
+
+def gradients_are_finite(model: nn.Module) -> bool:
+    for parameter in model.parameters():
+        gradient = parameter.grad
+        if gradient is not None and not bool(torch.isfinite(gradient.detach()).all().item()):
+            return False
+    return True
+
+
+def _assert_finite_tensor(
+    name: str,
+    value: torch.Tensor,
+    *,
+    sample_ids: list[str] | None = None,
+    report: bool = False,
+) -> None:
+    finite = torch.isfinite(value.detach())
+    if not bool(finite.all().item()):
+        bad_indices = (~finite.reshape(value.shape[0], -1).all(dim=1)).nonzero(as_tuple=False).flatten().tolist()
+        bad_samples = [sample_ids[index] for index in bad_indices] if sample_ids is not None else bad_indices
+        raise FloatingPointError(f"{name} contains non-finite values for samples {bad_samples}")
+    if report:
+        values = value.detach().float()
+        print(f"[finite] {name}: shape={tuple(value.shape)} min={values.min().item():.6g} max={values.max().item():.6g}")
+
+
+def spectral_magnitude_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    check_finite: bool = False,
+    report_finite: bool = False,
+    sample_ids: list[str] | None = None,
+) -> torch.Tensor:
+    if check_finite:
+        _assert_finite_tensor("spectral prediction", prediction, sample_ids=sample_ids, report=report_finite)
+        _assert_finite_tensor("spectral target", target, sample_ids=sample_ids, report=report_finite)
     prediction_spectrum = torch.fft.rfft2(prediction.float(), norm="ortho")
     target_spectrum = torch.fft.rfft2(target.float(), norm="ortho")
     prediction_log_magnitude = torch.log1p(prediction_spectrum.abs())
     target_log_magnitude = torch.log1p(target_spectrum.abs())
-    return F.l1_loss(prediction_log_magnitude, target_log_magnitude)
+    loss = F.l1_loss(prediction_log_magnitude, target_log_magnitude)
+    if check_finite:
+        _assert_finite_tensor("spectral loss", loss.reshape(1), report=report_finite)
+    return loss
 
 
 @torch.no_grad()
@@ -171,14 +291,23 @@ def write_data_split_manifest(run_dir: Path, train_loader, val_loader, config: d
 
 def main() -> None:
     args = parse_args()
+    if args.resume is not None and args.init_checkpoint is not None:
+        raise ValueError("Use either --resume or --init-checkpoint, not both")
     config = load_config(args.config)
-    seed_everything(int(config.get("seed", 1234)), deterministic=bool(config.get("deterministic", False)))
-    device = resolve_device(args.device)
-    train_loader, val_loader = build_dataloaders(config)
-    run_dir = ensure_dir(args.run_dir or config.get("run_dir", ROOT / "runs" / "edm_debug"))
-    ensure_dir(run_dir / "checkpoints")
-    dump_config(config, run_dir / "config_resolved.yaml")
-    write_data_split_manifest(run_dir, train_loader, val_loader, config)
+    runtime = setup_parallel(config, args.device)
+    seed_everything(int(config.get("seed", 1234)) + runtime.rank, deterministic=bool(config.get("deterministic", False)))
+    device = runtime.device
+    train_loader, val_loader = build_dataloaders(
+        config, distributed=runtime.mode == "ddp", rank=runtime.rank, world_size=runtime.count,
+        batch_size_multiplier=runtime.count if runtime.mode == "dp" else 1,
+    )
+    global_batch_size = int(config.get("loader", {}).get("batch_size", 2)) * runtime.count
+    run_dir = Path(args.run_dir or config.get("run_dir", ROOT / "runs" / "edm_debug"))
+    if runtime.main:
+        ensure_dir(run_dir / "checkpoints")
+        dump_config(config, run_dir / "config_resolved.yaml")
+        write_data_split_manifest(run_dir, train_loader, val_loader, config)
+    barrier(runtime)
 
     train_cfg = config.get("train", {})
     loss_cfg = config.get("loss", {})
@@ -215,11 +344,20 @@ def main() -> None:
         start_epoch = int(checkpoint.get("epoch", 0))
         global_step = int(checkpoint.get("step", 0))
         best_metric = float(checkpoint.get("best_metric", best_metric))
+        saved = checkpoint.get("extra", {}).get("parallel", {})
+        if saved and (int(saved.get("world_size", runtime.count)) != runtime.count or int(saved.get("global_batch_size", global_batch_size)) != global_batch_size):
+            raise RuntimeError("--resume requires matching world size and global batch size; use --init-checkpoint")
+    elif args.init_checkpoint is not None:
+        load_checkpoint(args.init_checkpoint, model=model, map_location=device)
+        if ema is not None:
+            ema.module.load_state_dict(model.state_dict(), strict=True)
 
-    jsonl = JsonlLogger(run_dir / "metrics.jsonl")
-    csv = CsvLogger(
-        run_dir / "loss_history.csv",
-        [
+    checkpoint_extra = {"parallel": {"mode": runtime.mode, "world_size": runtime.count, "global_batch_size": global_batch_size}}
+    training_forward = wrap_training_forward(model, runtime)
+
+    if runtime.main:
+        jsonl = JsonlLogger(run_dir / "metrics.jsonl")
+        csv = CsvLogger(run_dir / "loss_history.csv", [
             "epoch",
             "step",
             "lr",
@@ -238,20 +376,25 @@ def main() -> None:
             "sigma_mean",
             "sigma_min",
             "sigma_max",
-        ],
-    )
+        ])
+    else:
+        jsonl = csv = None
 
     save_every = int(train_cfg.get("save_every_steps", 500))
     val_every = int(train_cfg.get("val_every_steps", 500))
     grad_clip = float(train_cfg.get("grad_clip", 1.0))
+    max_consecutive_amp_overflows = max(1, int(train_cfg.get("max_consecutive_amp_overflows", 8)))
+    consecutive_amp_overflows = 0
     for epoch in range(start_epoch, epochs):
-        model.train()
-        progress = tqdm(train_loader, desc=f"edm epoch {epoch + 1}/{epochs}", dynamic_ncols=True)
+        if runtime.mode == "ddp":
+            train_loader.sampler.set_epoch(epoch)
+        training_forward.train()
+        progress = tqdm(train_loader, desc=f"edm epoch {epoch + 1}/{epochs}", dynamic_ncols=True) if runtime.main else train_loader
         for batch in progress:
             batch = move_batch(batch, device)
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp, amp_dtype):
-                losses = model.training_losses(
+                losses = training_forward(
                     batch["target"],
                     batch["pic"],
                     batch["x_matrix"],
@@ -259,6 +402,7 @@ def main() -> None:
                     tx_indices=batch["tx_indices"],
                     rx_indices=batch["rx_indices"],
                 )
+                edm_loss = losses["loss_edm"].mean()
                 x0_pred = losses["x0_pred"]
                 prior = output_prior_losses(
                     x0_pred,
@@ -280,20 +424,44 @@ def main() -> None:
                         feature_index=int(loss_cfg.get("phys_feature_index", 1)),
                     )
                 loss = (
-                    losses["loss_edm"]
+                    edm_loss
                     + prior["loss_prior_total"]
                     + spectral_lambda * spectral
                     + phys_lambda * phys
                 )
             scaler.scale(loss).backward()
-            if grad_clip > 0.0:
+            if grad_clip > 0.0 or scaler.is_enabled():
                 scaler.unscale_(optimizer)
+            finite_gradients = gradients_are_finite(model)
+            if not finite_gradients and not scaler.is_enabled():
+                raise FloatingPointError("Non-finite gradients without an enabled GradScaler")
+            if finite_gradients and grad_clip > 0.0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            gnorm = grad_norm(model.parameters())
+            gnorm = grad_norm(model.parameters()) if finite_gradients else float("nan")
+            scale_before = scaler.get_scale()
             scaler.step(optimizer)
             scaler.update()
+            if not finite_gradients:
+                consecutive_amp_overflows += 1
+                scale_after = scaler.get_scale()
+                if runtime.main:
+                    jsonl.write({
+                        "type": "amp_overflow",
+                        "epoch": epoch + 1,
+                        "step": global_step,
+                        "consecutive": consecutive_amp_overflows,
+                        "scale_before": scale_before,
+                        "scale_after": scale_after,
+                    })
+                if consecutive_amp_overflows >= max_consecutive_amp_overflows:
+                    raise FloatingPointError(
+                        f"{consecutive_amp_overflows} consecutive AMP overflows; "
+                        f"scale {scale_before} -> {scale_after}"
+                    )
+                continue
+            consecutive_amp_overflows = 0
             scheduler.step()
-            if ema is not None:
+            if ema is not None and runtime.main:
                 ema.update(model)
             global_step += 1
             sigma = losses["sigma"].detach().float()
@@ -302,7 +470,7 @@ def main() -> None:
                 "step": global_step,
                 "lr": optimizer.param_groups[0]["lr"],
                 "loss": safe_float(loss),
-                "loss_edm": safe_float(losses["loss_edm"]),
+                "loss_edm": safe_float(edm_loss),
                 "loss_x0_l1": safe_float(prior["loss_l1"]),
                 "loss_tv": safe_float(prior["loss_tv"]),
                 "loss_range": safe_float(prior["loss_range"]),
@@ -317,29 +485,28 @@ def main() -> None:
                 "sigma_min": safe_float(sigma.min()),
                 "sigma_max": safe_float(sigma.max()),
             }
-            csv.write(row)
-            if global_step % int(train_cfg.get("log_every_steps", 10)) == 0:
-                jsonl.write({"type": "train", **row})
-            progress.set_postfix(loss=f"{row['loss']:.4g}", x0_mae=f"{row['x0_mae']:.4g}")
+            row = reduce_train_row(row, runtime)
+            if runtime.main:
+                csv.write(row)
+                if global_step % int(train_cfg.get("log_every_steps", 10)) == 0:
+                    jsonl.write({"type": "train", **row})
+                progress.set_postfix(loss=f"{row['loss']:.4g}", x0_mae=f"{row['x0_mae']:.4g}")
             if val_loader is not None and val_every > 0 and global_step % val_every == 0:
-                eval_model = ema.module if ema is not None else model
-                metrics = validate(eval_model, val_loader, device, amp, amp_dtype)
-                jsonl.write({"type": "val", "epoch": epoch + 1, "step": global_step, **metrics})
-                model.train()
-                if metrics["loss"] < best_metric:
-                    best_metric = metrics["loss"]
-                    save_checkpoint(
-                        run_dir / "checkpoints" / "best.pt",
-                        model=model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        ema=ema.module if ema is not None else None,
-                        epoch=epoch + 1,
-                        step=global_step,
-                        best_metric=best_metric,
-                    )
-            if save_every > 0 and global_step % save_every == 0:
+                barrier(runtime)
+                if runtime.main:
+                    eval_model = ema.module if ema is not None else model
+                    metrics = validate(eval_model, val_loader, device, amp, amp_dtype)
+                    jsonl.write({"type": "val", "epoch": epoch + 1, "step": global_step, **metrics})
+                    training_forward.train()
+                    if metrics["loss"] < best_metric:
+                        best_metric = metrics["loss"]
+                        save_checkpoint(
+                            run_dir / "checkpoints" / "best.pt", model=model, optimizer=optimizer,
+                            scheduler=scheduler, scaler=scaler, ema=ema.module if ema is not None else None,
+                            epoch=epoch + 1, step=global_step, best_metric=best_metric, extra=checkpoint_extra,
+                        )
+                barrier(runtime)
+            if runtime.main and save_every > 0 and global_step % save_every == 0:
                 save_checkpoint(
                     run_dir / "checkpoints" / f"step_{global_step:08d}.pt",
                     model=model,
@@ -350,18 +517,17 @@ def main() -> None:
                     epoch=epoch + 1,
                     step=global_step,
                     best_metric=best_metric,
+                    extra=checkpoint_extra,
                 )
-        save_checkpoint(
-            run_dir / "checkpoints" / "last.pt",
-            model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            scaler=scaler,
-            ema=ema.module if ema is not None else None,
-            epoch=epoch + 1,
-            step=global_step,
-            best_metric=best_metric,
-        )
+        if runtime.main:
+            save_checkpoint(
+                run_dir / "checkpoints" / "last.pt", model=model, optimizer=optimizer, scheduler=scheduler,
+                scaler=scaler, ema=ema.module if ema is not None else None, epoch=epoch + 1, step=global_step,
+                best_metric=best_metric, extra=checkpoint_extra,
+            )
+    barrier(runtime)
+    if runtime.mode == "ddp" and dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
