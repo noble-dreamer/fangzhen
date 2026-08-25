@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ultrasonic Imaging Physics Baselines"
+  short_description: "Generate coarse maps and validate physical inversions"
+  default_prompt: "Use $ultrasonic-imaging-physics-baselines to generate ultrasonic coarse conditions or run and diagnose the project physical inversion baselines."

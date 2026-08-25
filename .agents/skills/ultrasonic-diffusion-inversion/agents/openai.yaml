@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ultrasonic Diffusion Inversion"
+  short_description: "Build and validate ultrasonic EDM inversion pipelines"
+  default_prompt: "Use $ultrasonic-diffusion-inversion to build, train, migrate, sample, or validate this project EDM pipeline."

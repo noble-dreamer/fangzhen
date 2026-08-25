@@ -1,0 +1,4 @@
+interface:
+  display_name: "COMSOL Frequency Streaming"
+  short_description: "COMSOL streaming and pipe dispersion workflows"
+  default_prompt: "Use $comsol-frequency-streaming to audit, build, or validate COMSOL frequency-domain streaming and pipe-dispersion simulations."

@@ -15,6 +15,20 @@ def append_dims(value: torch.Tensor, target_ndim: int) -> torch.Tensor:
     return value.reshape(value.shape[0], *((1,) * (target_ndim - 1)))
 
 
+def edm_preconditioned_target(
+    x_start: torch.Tensor,
+    noise: torch.Tensor,
+    sigma: torch.Tensor,
+    sigma_data: float,
+) -> torch.Tensor:
+    sigma_img = append_dims(sigma, x_start.ndim)
+    denom = sigma_img.square() + sigma_data**2
+    c_skip = sigma_data**2 / denom
+    c_out = sigma_img * sigma_data / torch.sqrt(denom)
+    noisy = x_start + sigma_img * noise
+    return (x_start - c_skip * noisy) / c_out.clamp_min(1e-12)
+
+
 class EDMDiffusion(nn.Module):
     """Karras EDM preconditioned conditional denoiser.
 
@@ -184,8 +198,8 @@ class EDMDiffusion(nn.Module):
             tx_indices=tx_indices,
             rx_indices=rx_indices,
         )
-        weight = (sigma_img.square() + self.sigma_data**2) / ((sigma_img * self.sigma_data) ** 2).clamp_min(1e-12)
-        loss = torch.mean(weight * (denoised - x_start).square())
+        target = edm_preconditioned_target(x_start, noise, sigma, self.sigma_data)
+        loss = F.mse_loss(raw, target)
         return {
             "loss_edm": loss,
             "x0_pred": denoised,

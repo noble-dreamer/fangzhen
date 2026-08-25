@@ -707,6 +707,60 @@ conda run -n diffusion python simple/diffusion_EDM/train_edm.py `
   --config simple/diffusion_EDM/configs/dataset_a_256_base48_edm.yaml
 ```
 
+### 三卡 FP16 训练（优先 DataParallel）
+
+`dataset_a_256_base48_edm_3gpu_fp16.yaml` 固定每卡 batch 为 3，三卡 global batch 为 9；1080 个 train sample 对应每 epoch 120 step。普通 Python 启动会使用 DataParallel，因此当前 Windows A5000 和 Linux 2080 Ti 都优先使用以下命令。可见 GPU 少于 3 张时会直接失败，不会退化为单卡。
+
+Windows PowerShell：
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES = "0,1,2"
+conda run --no-capture-output -n diffusion_cuda128 python simple/diffusion_EDM/train_edm.py `
+  --config simple/diffusion_EDM/configs/dataset_a_256_base48_edm_3gpu_fp16.yaml
+```
+
+Linux：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2 conda run --no-capture-output -n diffusion_cuda128 \
+  python simple/diffusion_EDM/train_edm.py \
+  --config simple/diffusion_EDM/configs/dataset_a_256_base48_edm_3gpu_fp16.yaml
+```
+
+统一保持 `amp_dtype: float16`。A5000 支持 BF16，但这里不切换，以保持 2080 Ti、A5000 和后续单卡 A6000 的 checkpoint、optimizer state 和训练动态可比。
+
+### Linux 可选 NCCL DDP
+
+只有显式使用 `torchrun`（`WORLD_SIZE > 1`）时，入口才进入 DDP；每个 rank 读取不重叠的训练 sample，rank 0 负责验证、日志和 checkpoint。若需要评估 DDP 吞吐，可在 Linux 使用：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2 torchrun --standalone --nproc_per_node=3 \
+  simple/diffusion_EDM/train_edm.py \
+  --config simple/diffusion_EDM/configs/dataset_a_256_base48_edm_3gpu_fp16.yaml
+```
+
+Windows 原生 PyTorch 不提供 NCCL；该配置在 Windows 的 `torchrun` 下会明确报错，请使用上面的 DataParallel 命令，不将 Gloo DDP 作为正式训练路径。
+
+### Checkpoint 续训与迁移
+
+checkpoint 始终保存原始 EDM 模型和 EMA，不包含 `module.` 前缀，可严格加载到 single、DataParallel 或 DDP。`--resume` 同时恢复 model、optimizer、scheduler、scaler、EMA、epoch 和 step，仅用于 world size 与 global batch 都不变的续训：
+
+```powershell
+conda run --no-capture-output -n diffusion_cuda128 python simple/diffusion_EDM/train_edm.py `
+  --config simple/diffusion_EDM/configs/dataset_a_256_base48_edm_3gpu_fp16.yaml `
+  --resume simple/diffusion_EDM/runs/dataset_a_256_base48_edm_3gpu_fp16/checkpoints/last.pt
+```
+
+从旧单卡 batch 8 切换到三卡 global batch 9 时，使用 `--init-checkpoint`，它只严格加载模型权重并重置 optimizer、scheduler、scaler、EMA、epoch 和 step：
+
+```powershell
+conda run --no-capture-output -n diffusion_cuda128 python simple/diffusion_EDM/train_edm.py `
+  --config simple/diffusion_EDM/configs/dataset_a_256_base48_edm_3gpu_fp16.yaml `
+  --init-checkpoint simple/diffusion_EDM/runs/dataset_a_256_base48_fp16_22g/checkpoints/last.pt
+```
+
+三卡 checkpoint 可直接在单卡 A6000 上采样或评估，使用结构匹配的单卡配置和 `--use-ema`；三卡专用配置因 `require_device_count: 3` 不应用于该单卡训练入口。
+
 ### base48 EDM 采样
 
 ```powershell
